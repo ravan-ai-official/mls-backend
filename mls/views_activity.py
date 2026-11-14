@@ -95,12 +95,28 @@ class StudioActivityAPIView(APIView):
     def get(self, request):
         days = _window_days(request.query_params.get("days"))
         since = timezone.now() - timedelta(days=days)
-        user_id = request.query_params.get("user_id")
+        # Accept numeric id, email, or username — Studio used to strip non-digits
+        # so filtering by email looked like a no-op page reload.
+        user_raw = (
+            request.query_params.get("user_id")
+            or request.query_params.get("user")
+            or ""
+        ).strip()
         user = None
-        if user_id:
-            user = get_user_model().objects.filter(pk=user_id).first()
+        if user_raw:
+            User = get_user_model()
+            user = None
+            if user_raw.isdigit():
+                user = User.objects.filter(pk=int(user_raw)).first()
             if user is None:
-                return Response({"error": "User not found."}, status=404)
+                user = User.objects.filter(email__iexact=user_raw).first()
+            if user is None:
+                user = User.objects.filter(username__iexact=user_raw).first()
+            if user is None:
+                return Response(
+                    {"error": "User not found. Try their email, username, or numeric id."},
+                    status=404,
+                )
 
         listing_qs = ListingViewEvent.objects.filter(created_at__gte=since)
         precon_qs = PreconActivityEvent.objects.filter(created_at__gte=since)
