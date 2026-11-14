@@ -272,10 +272,14 @@ class StudioActivityAPIView(APIView):
             }.get(row["event"])
             if key:
                 bucket[key] = row["total"]
-        titles = {
-            project.pk: project.content.title
-            for project in PreComProperty.objects.filter(pk__in=by_project).select_related("content")
-        }
+        titles = {}
+        for project in PreComProperty.objects.filter(pk__in=by_project).select_related("content"):
+            content = getattr(project, "content", None)
+            titles[project.pk] = (
+                (getattr(content, "title", None) or "").strip()
+                or (getattr(project, "address", None) or "").strip()
+                or f"Project {project.pk}"
+            )
         top_projects = sorted(by_project.values(), key=lambda row: row["views"], reverse=True)[:8]
         for row in top_projects:
             row["title"] = titles.get(row["id"], f"Project {row['id']}")
@@ -299,8 +303,9 @@ class StudioActivityAPIView(APIView):
             neighbour = NearbyAlert.objects.filter(created_at__gte=since, user=user).count()
 
         listing_rows = list(listing_qs.select_related("user").order_by("-created_at")[:20])
+        # PropertyInquiry.project is EstateProject (title/address), not PreComProperty.content.
         inquiry_rows = list(
-            inquiry_qs.select_related("user", "project__content").order_by("-created_at")[:15]
+            inquiry_qs.select_related("user", "project").order_by("-created_at")[:15]
         )
         props = _props_by_key(
             [row.listing_key for row in listing_rows]
@@ -411,8 +416,14 @@ class StudioActivityAPIView(APIView):
             detail_bits = [f"Intent: {row.get_intent_display()}"]
             if snap:
                 detail_bits.append(snap["detail"])
-            elif row.project_id and getattr(row, "project", None) and row.project.content_id:
-                detail_bits.append(f"Pre-con: {row.project.content.title}")
+            elif row.project_id and getattr(row, "project", None):
+                project = row.project
+                project_title = (
+                    (getattr(project, "title", None) or "").strip()
+                    or (getattr(project, "address", None) or "").strip()
+                    or f"Project {row.project_id}"
+                )
+                detail_bits.append(f"Pre-con: {project_title}")
             if row.message:
                 detail_bits.append(row.message.strip()[:140])
             if row.phone:
