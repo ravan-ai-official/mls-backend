@@ -1969,7 +1969,13 @@ class PropertyCompareDetailView(APIView):
         listing_keys = request.query_params.getlist('listing_key')
         if not listing_keys:
             return Response({"detail": "No listing_keys provided."}, status=status.HTTP_400_BAD_REQUEST)
-        properties = Property.objects.filter(listing_key__in=listing_keys)
+        # Accept board MLS numbers (listing_id) as well as internal listing_key —
+        # Studio keyword pins almost always paste the public MLS® id.
+        keys = [str(key).strip() for key in listing_keys if str(key).strip()]
+        match = Q()
+        for key in keys:
+            match |= Q(listing_key__iexact=key) | Q(listing_id__iexact=key)
+        properties = Property.objects.filter(match) if keys else Property.objects.none()
         if not properties.exists():
             return Response({"detail": "No properties found."}, status=status.HTTP_404_NOT_FOUND)
         serializer = PropertyDetailSerializer(properties, many=True)
