@@ -1,4 +1,4 @@
-﻿from datetime import date
+from datetime import date
 
 from mls.models import Property
 from mls.services.ddf.converters import (

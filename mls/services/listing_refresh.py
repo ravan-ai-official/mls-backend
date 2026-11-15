@@ -1,4 +1,4 @@
-﻿"""
+"""
 On-demand refresh of a single listing from AMPRE.
 
 Used when the rolling DDF cache is stale (Celery not running, or a listing

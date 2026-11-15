@@ -1,4 +1,4 @@
-﻿"""
+"""
 Pull recent Closed / Expired / Cancelled / Withdrawn listings from AMPRE
 into the local Property table so Sold and De-listed tabs have rows.
 

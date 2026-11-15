@@ -1,4 +1,4 @@
-﻿from celery import shared_task
+from celery import shared_task
 
 from mls.services.newsletter_notifications import send_daily_listing_newsletters
 
