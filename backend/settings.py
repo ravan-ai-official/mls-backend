@@ -215,12 +215,19 @@ if os.environ.get("SOLD_TRENDS_WARM_BEAT_ENABLED", "0") == "1":
 
 # DDF rolling cache + AMPRE off-market sync. Required for HouseSigma-parity
 # status/price: without these, Active rows go stale and Terminated never lands.
+#
+# Both default to daily (24h). Set *_HOUR_UTC / *_MINUTE_UTC to change the
+# time of day, or override the whole schedule with *_CRON_HOUR / *_CRON_MINUTE
+# (accept crontab strings like "*/6" or "0,12") for sub-daily cadences.
 if os.environ.get("DDF_SYNC_BEAT_ENABLED", "0") == "1":
     CELERY_BEAT_SCHEDULE = {
         **globals().get("CELERY_BEAT_SCHEDULE", {}),
         "sync-ddf-listing-cache": {
             "task": "mls.tasks.sync_ddf_listing_cache",
-            "schedule": crontab(minute="*/30"),
+            "schedule": crontab(
+                hour=os.environ.get("DDF_SYNC_CRON_HOUR", os.environ.get("DDF_SYNC_HOUR_UTC", "6")),
+                minute=os.environ.get("DDF_SYNC_CRON_MINUTE", os.environ.get("DDF_SYNC_MINUTE_UTC", "0")),
+            ),
         },
     }
 
@@ -229,7 +236,10 @@ if os.environ.get("AMPRE_CLOSED_BEAT_ENABLED", "0") == "1":
         **globals().get("CELERY_BEAT_SCHEDULE", {}),
         "sync-ampre-inactive-listings": {
             "task": "mls.tasks.sync_ampre_inactive_listings",
-            "schedule": crontab(minute=20, hour="*/6"),
+            "schedule": crontab(
+                hour=os.environ.get("AMPRE_CLOSED_CRON_HOUR", os.environ.get("AMPRE_CLOSED_HOUR_UTC", "7")),
+                minute=os.environ.get("AMPRE_CLOSED_CRON_MINUTE", os.environ.get("AMPRE_CLOSED_MINUTE_UTC", "15")),
+            ),
         },
     }
 

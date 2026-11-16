@@ -905,3 +905,15 @@ class AISearchLogAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return request.method in ("GET", "HEAD")
+
+
+# Auto-register any remaining concrete mls models with a default ModelAdmin
+# so every model is reachable from /admin/. Models registered above keep
+# their custom ModelAdmin.
+from django.apps import apps as _apps  # noqa: E402
+
+for _model in _apps.get_app_config("mls").get_models():
+    try:
+        admin.site.register(_model)
+    except admin.sites.AlreadyRegistered:
+        pass
