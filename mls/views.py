@@ -1928,6 +1928,22 @@ class PropertyDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Keep detail pages honest even when Celery/DDF sync is behind:
+        # stale Active rows are re-checked against AMPRE (status/price/sqft).
+        try:
+            from mls.services.listing_refresh import maybe_refresh_stale_listing
+
+            property_obj = maybe_refresh_stale_listing(property_obj)
+            property_obj = (
+                Property.objects
+                .prefetch_related("media", "rooms")
+                .filter(pk=property_obj.pk)
+                .first()
+                or property_obj
+            )
+        except Exception:
+            pass
+
         serializer = PropertyDetailSerializer(
             property_obj,
             context={"request": request},
@@ -1969,7 +1985,13 @@ class PropertyCompareDetailView(APIView):
         listing_keys = request.query_params.getlist('listing_key')
         if not listing_keys:
             return Response({"detail": "No listing_keys provided."}, status=status.HTTP_400_BAD_REQUEST)
-        properties = Property.objects.filter(listing_key__in=listing_keys)
+        # Accept board MLS numbers (listing_id) as well as internal listing_key —
+        # Studio keyword pins almost always paste the public MLS® id.
+        keys = [str(key).strip() for key in listing_keys if str(key).strip()]
+        match = Q()
+        for key in keys:
+            match |= Q(listing_key__iexact=key) | Q(listing_id__iexact=key)
+        properties = Property.objects.filter(match) if keys else Property.objects.none()
         if not properties.exists():
             return Response({"detail": "No properties found."}, status=status.HTTP_404_NOT_FOUND)
         serializer = PropertyDetailSerializer(properties, many=True)

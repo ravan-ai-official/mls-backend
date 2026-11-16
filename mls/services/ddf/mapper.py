@@ -1,3 +1,6 @@
+import re
+from datetime import date
+
 from mls.models import Property
 from mls.services.ddf.converters import (
     safe_bool,
@@ -7,6 +10,51 @@ from mls.services.ddf.converters import (
     safe_list,
     safe_str,
 )
+
+
+def _year_from_approximate_age(raw) -> int | None:
+    """RESO ApproximateAge is often age-in-years; convert to a calendar year."""
+    age = safe_int(raw)
+    if age is None or age < 0 or age >= 300:
+        return None
+    return date.today().year - age
+
+
+def _year_from_remarks(remarks) -> int | None:
+    """Parse '4-year-new' / 'built in 2022' from PublicRemarks when YearBuilt is blank."""
+    text = safe_str(remarks)
+    if not text:
+        return None
+    built_in = re.search(r"\bbuilt\s+in\s+(\d{4})\b", text, re.I)
+    if built_in:
+        year = int(built_in.group(1))
+        current = date.today().year
+        if 1800 <= year <= current + 1:
+            return year
+    age_new = re.search(r"(\d+)\s*[- ]?\s*year(?:s)?[ -]?new\b", text, re.I)
+    if age_new:
+        age = int(age_new.group(1))
+        if 0 <= age < 300:
+            return date.today().year - age
+    return None
+
+
+def _living_area_fields(data) -> dict:
+    """Map LivingArea plus the min/max band DDF uses when exact sqft is absent."""
+    living = safe_decimal(data.get("LivingArea"))
+    living_min = safe_decimal(data.get("LivingAreaMinimum"))
+    living_max = safe_decimal(data.get("LivingAreaMaximum"))
+    if living is None and living_min is not None:
+        living = living_min
+    elif living is None and living_max is not None:
+        living = living_max
+    return {
+        "living_area": living,
+        "living_area_units": safe_str(data.get("LivingAreaUnits")),
+        "living_area_source": safe_str(data.get("LivingAreaSource")),
+        "living_area_minimum": living_min,
+        "living_area_maximum": living_max,
+    }
 
 
 def map_property_defaults(data):
@@ -130,7 +178,22 @@ def map_property_defaults(data):
 
         # Building measurements
         "parking_total": safe_int(data.get("ParkingTotal")),
-        "year_built": safe_int(data.get("YearBuilt")),
+        "garages": safe_int(
+            data.get("GarageSpaces")
+            if data.get("GarageSpaces") is not None
+            else data.get("CoveredSpaces")
+        ),
+        "garage_size": safe_str(data.get("GarageType"))
+        or safe_list(data.get("GarageType")),
+        "kitchens": safe_int(
+            data.get("NumberOfKitchens")
+            if data.get("NumberOfKitchens") is not None
+            else data.get("KitchensTotalInteger")
+        ),
+        "year_built": safe_int(data.get("YearBuilt"))
+        or _year_from_approximate_age(data.get("ApproximateAge"))
+        or _year_from_approximate_age(data.get("PropertyAge"))
+        or _year_from_remarks(data.get("PublicRemarks")),
         "bathrooms_partial": safe_int(data.get("BathroomsPartial")),
         "bathrooms_total_integer": safe_int(
             data.get("BathroomsTotalInteger")
@@ -161,9 +224,10 @@ def map_property_defaults(data):
         "below_grade_finished_area_source": safe_str(
             data.get("BelowGradeFinishedAreaSource")
         ),
-        "living_area": safe_decimal(data.get("LivingArea")),
-        "living_area_units": safe_str(data.get("LivingAreaUnits")),
-        "living_area_source": safe_str(data.get("LivingAreaSource")),
+        # TRREB/DDF often leave LivingArea null and only fill the min/max
+        # band (e.g. 800ΓÇô899). Persist the band and use the floor as the
+        # displayable living_area so cards/Key Facts are not blank.
+        **_living_area_fields(data),
 
         # Interior and construction
         "fireplaces_total": safe_int(data.get("FireplacesTotal")),
@@ -184,7 +248,8 @@ def map_property_defaults(data):
         "construction_materials": safe_list(
             data.get("ConstructionMaterials")
         ),
-        "stories": safe_int(data.get("Stories")),
+        "stories": safe_int(data.get("Stories"))
+        or safe_int(data.get("StoriesTotal")),
         "property_attached_yn": safe_bool(data.get("PropertyAttachedYN")),
         "accessibility_features": safe_list(
             data.get("AccessibilityFeatures")
