@@ -4,16 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from cloudinary import uploader as cloudinary_uploader
-from cloudinary.exceptions import Error as CloudinaryError
-from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from PIL import Image, UnidentifiedImageError
 from rest_framework import status
-from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -26,9 +21,6 @@ from .site_content import KEYS, SCHEMA_VERSION, SiteValidationError, default_doc
 logger = logging.getLogger(__name__)
 
 MAX_REVISIONS = 20
-HERO_MIN = (1600, 900)
-SECTION_MIN = (800, 450)
-MAX_UPLOAD_MB = 8
 
 
 def ensure_documents() -> None:
@@ -229,58 +221,3 @@ class StudioSiteRestoreView(APIView):
         return Response(_payload(row))
 
 
-class StudioSiteMediaView(APIView):
-    """Image upload for hero and section photos. Dimensions are checked before storage."""
-
-    permission_classes = [IsStaffUser]
-    parser_classes = [MultiPartParser, FormParser]
-
-    def post(self, request):
-        upload = request.FILES.get("file")
-        if not upload:
-            return Response({"detail": "Choose an image to upload."}, status=status.HTTP_400_BAD_REQUEST)
-        if upload.size > MAX_UPLOAD_MB * 1024 * 1024:
-            return Response(
-                {"detail": f"Images must be {MAX_UPLOAD_MB} MB or smaller."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        role = (request.query_params.get("role") or request.data.get("role") or "section").strip()
-        minimum = HERO_MIN if role == "hero" else SECTION_MIN
-        try:
-            with Image.open(upload) as image:
-                width, height = image.size
-                image.verify()
-        except (UnidentifiedImageError, OSError):
-            return Response({"detail": "Upload a JPEG, PNG, or WebP image."}, status=status.HTTP_400_BAD_REQUEST)
-        if width < minimum[0] or height < minimum[1]:
-            return Response(
-                {"detail": f"Use an image at least {minimum[0]}×{minimum[1]} pixels so it stays sharp."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        upload.seek(0)
-        if not getattr(settings, "PRECON_ASSET_STORAGE_CONFIGURED", False):
-            return Response(
-                {"detail": "File storage is not configured on the server."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        try:
-            uploaded = cloudinary_uploader.upload(
-                upload,
-                resource_type="image",
-                folder="site/studio",
-                use_filename=True,
-                unique_filename=True,
-            )
-        except CloudinaryError:
-            logger.exception("Site image upload failed")
-            return Response(
-                {"detail": "The image could not be stored. Please try again."},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        url = str(uploaded.get("secure_url") or "")
-        if not url.startswith("https://"):
-            return Response({"detail": "Storage returned an unusable link."}, status=status.HTTP_502_BAD_GATEWAY)
-        return Response(
-            {"url": url, "width": width, "height": height},
-            status=status.HTTP_201_CREATED,
-        )

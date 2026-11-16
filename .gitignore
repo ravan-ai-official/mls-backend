@@ -19,3 +19,4 @@ htmlcov/
 !.env.example
 db.sqlite3
 .env*
+.env.prod

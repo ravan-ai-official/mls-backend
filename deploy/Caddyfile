@@ -1,0 +1,43 @@
+# Caddy reverse-proxy + automatic Let's Encrypt TLS.
+# Reads {$DOMAIN} and {$ADMIN_EMAIL} from the environment (set by compose).
+#
+# Zero-config TLS: as long as $DOMAIN's DNS A record points at this VM's
+# public IP and ports 80/443 are open, Caddy fetches + renews a cert.
+
+{
+    email {$ADMIN_EMAIL}
+    # Uncomment during first-time testing to avoid Let's Encrypt rate limits:
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$DOMAIN} {
+    encode zstd gzip
+
+    # Deny obviously-abusive paths cheaply.
+    @badbots {
+        header User-Agent "*sqlmap*"
+        header User-Agent "*nikto*"
+    }
+    respond @badbots 403
+
+    # Health check — bypass gunicorn for lower noise.
+    handle /health/live {
+        respond "ok" 200
+    }
+
+    # Everything else goes to Django.
+    reverse_proxy backend:8080 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Real-IP {remote_host}
+    }
+
+    # Allow large uploads (listing photos).
+    request_body {
+        max_size 25MB
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

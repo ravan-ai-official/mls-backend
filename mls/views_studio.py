@@ -8,9 +8,6 @@ import logging
 import mimetypes
 from urllib.parse import urlparse
 
-from cloudinary import uploader as cloudinary_uploader
-from cloudinary.exceptions import Error as CloudinaryError
-from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Count, F, Max, Q
 from django.shortcuts import get_object_or_404
@@ -18,7 +15,6 @@ from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -210,53 +206,6 @@ class StudioPreconDetailAPIView(APIView):
             )
         instance.content.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-class StudioPreconAssetUploadAPIView(APIView):
-    """POST a photo or PDF (``file``); stores it in Cloudinary and returns its URL."""
-
-    permission_classes = [IsStaffUser]
-    parser_classes = [MultiPartParser, FormParser]
-
-    def post(self, request):
-        upload = request.FILES.get("file")
-        if not upload:
-            return Response({"detail": "Choose a file to upload."}, status=status.HTTP_400_BAD_REQUEST)
-        if not settings.PRECON_ASSET_STORAGE_CONFIGURED:
-            return Response(
-                {"detail": "File storage is not configured on the server."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        max_mb = settings.PRECON_ASSET_MAX_UPLOAD_MB
-        if upload.size > max_mb * 1024 * 1024:
-            return Response({"detail": f"Files must be {max_mb} MB or smaller."}, status=status.HTTP_400_BAD_REQUEST)
-
-        supplied = str(getattr(upload, "content_type", "") or "").lower()
-        mime_type = supplied if supplied.startswith("image/") or supplied == "application/pdf" else _infer_mime_type(upload.name)
-        if not (mime_type.startswith("image/") or mime_type == "application/pdf"):
-            return Response(
-                {"detail": "Upload a JPEG, PNG, WebP, GIF or PDF file."}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            uploaded = cloudinary_uploader.upload(
-                upload,
-                resource_type="auto",
-                folder="precon/studio",
-                use_filename=True,
-                unique_filename=True,
-            )
-        except CloudinaryError:
-            logger.exception("Studio pre-con upload failed")
-            return Response(
-                {"detail": "The file could not be stored. Please try again."}, status=status.HTTP_502_BAD_GATEWAY
-            )
-        url = str(uploaded.get("secure_url") or "")
-        if not url or len(url) > 200:
-            return Response({"detail": "Storage returned an unusable link."}, status=status.HTTP_502_BAD_GATEWAY)
-        return Response(
-            {"url": url, "mime_type": mime_type, "title": upload.name[:255]}, status=status.HTTP_201_CREATED
-        )
 
 
 # --------------------------------------------------------------------------

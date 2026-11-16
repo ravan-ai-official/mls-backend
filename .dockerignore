@@ -1,0 +1,55 @@
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Virtualenvs
+venv
+.venv
+env
+ENV
+
+# Env & secrets — never bake these into an image
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local DB / media
+*.sqlite3
+media/
+staticfiles/
+
+# Docs / misc
+README.md
+SMOKE_GATE.md
+*.md
+reports/
+estate-import-review.txt
+project-schema.sql
+
+# Node (frontend lives elsewhere but just in case)
+node_modules
+
+# Vercel / previous deploy artifacts
+.vercel
+vercel.json
+
+# Local dev-only
+Dockerfile.dev
+docker-compose*.yml

@@ -48,10 +48,6 @@ FIELDS: tuple[dict, ...] = (
     {"key": "twilioVerifyServiceSid", "env": "TWILIO_VERIFY_SERVICE_SID", "setting": "TWILIO_VERIFY_SERVICE_SID", "public": False, "secret": False, "group": "Phone verification", "label": "Twilio Verify service", "hint": "Starts with VA."},
     {"key": "twilioPhoneNumber", "env": "TWILIO_PHONE_NUMBER", "setting": "", "public": False, "secret": False, "group": "Phone verification", "label": "Twilio phone number", "hint": "Digits only, with country code."},
     {"key": "openaiApiKey", "env": "GEMINI_API_KEY", "also": ["OPENAI_API_KEY"], "setting": "", "public": False, "secret": True, "group": "AI", "label": "Gemini API key", "hint": "Paste the Gemini key here. Search, listing summaries, and the assistant use it."},
-    {"key": "cloudinaryCloudName", "env": "CLOUDINARY_CLOUD_NAME", "setting": "", "public": False, "secret": False, "group": "Photos", "label": "Cloudinary cloud name", "hint": "Where uploaded photos and files are stored."},
-    {"key": "cloudinaryApiKey", "env": "CLOUDINARY_API_KEY", "setting": "", "public": False, "secret": False, "group": "Photos", "label": "Cloudinary API key", "hint": ""},
-    {"key": "cloudinaryApiSecret", "env": "CLOUDINARY_API_SECRET", "setting": "", "public": False, "secret": True, "group": "Photos", "label": "Cloudinary API secret", "hint": ""},
-    {"key": "cloudinaryUrl", "env": "CLOUDINARY_URL", "setting": "", "public": False, "secret": True, "group": "Photos", "label": "Cloudinary URL", "hint": "cloudinary://key:secret@cloud-name"},
     {"key": "estateImageMaxUploadMb", "env": "ESTATE_IMAGE_MAX_UPLOAD_MB", "setting": "ESTATE_IMAGE_MAX_UPLOAD_MB", "public": False, "secret": False, "group": "Photos", "label": "Image upload limit", "hint": "Megabytes."},
     {"key": "preconAssetMaxUploadMb", "env": "PRECON_ASSET_MAX_UPLOAD_MB", "setting": "PRECON_ASSET_MAX_UPLOAD_MB", "public": False, "secret": False, "group": "Photos", "label": "Pre-construction file limit", "hint": "Megabytes."},
     {"key": "estateDocumentAllowedHosts", "env": "ESTATE_DOCUMENT_ALLOWED_HOSTS", "setting": "ESTATE_DOCUMENT_ALLOWED_HOSTS", "public": False, "secret": False, "group": "Photos", "label": "Allowed file hosts", "hint": "Comma-separated host names."},
@@ -92,7 +88,6 @@ FIELDS: tuple[dict, ...] = (
     {"key": "aiAssistUserRate", "env": "AI_ASSIST_USER_RATE", "setting": "", "public": False, "secret": False, "group": "AI", "label": "Assistant limit for members", "hint": "The server picks this up the next time it starts.", "fallback": "60/hour"},
     {"key": "aiSearchAnonRate", "env": "AI_SEARCH_ANON_RATE", "setting": "", "public": False, "secret": False, "group": "AI", "label": "Search limit for guests", "hint": "The server picks this up the next time it starts.", "fallback": "30/hour"},
     {"key": "aiSearchUserRate", "env": "AI_SEARCH_USER_RATE", "setting": "", "public": False, "secret": False, "group": "AI", "label": "Search limit for members", "hint": "The server picks this up the next time it starts.", "fallback": "120/hour"},
-    {"key": "estateCloudinaryPickerPrefix", "env": "ESTATE_CLOUDINARY_PICKER_PREFIX", "setting": "", "public": False, "secret": False, "group": "Photos", "label": "Photo folder prefix", "hint": ""},
     {"key": "estateDocumentAccessMaxAge", "env": "ESTATE_DOCUMENT_ACCESS_MAX_AGE", "setting": "ESTATE_DOCUMENT_ACCESS_MAX_AGE", "public": False, "secret": False, "group": "Photos", "label": "Document link lifetime", "hint": "Seconds."},
     {"key": "estateDocumentMaxBytes", "env": "ESTATE_DOCUMENT_MAX_BYTES", "setting": "ESTATE_DOCUMENT_MAX_BYTES", "public": False, "secret": False, "group": "Photos", "label": "Document size limit", "hint": "Bytes."},
     {"key": "featuredCacheTtlSeconds", "env": "FEATURED_CACHE_TTL_SECONDS", "setting": "", "public": False, "secret": False, "group": "Advanced", "label": "Featured listings cache", "hint": "Seconds.", "fallback": "300"},
@@ -215,17 +210,6 @@ def apply_overlay() -> None:
             setattr(settings, attr, cast(value) if cast else value)
         except (TypeError, ValueError):
             setattr(settings, attr, value)
-    cloud = getattr(settings, "CLOUDINARY", None)
-    if isinstance(cloud, dict):
-        name = saved.get("cloudinaryCloudName", "")
-        api_key = saved.get("cloudinaryApiKey", "")
-        secret = saved.get("cloudinaryApiSecret", "")
-        if name:
-            cloud["CLOUD_NAME"] = name
-        if api_key:
-            cloud["API_KEY"] = api_key
-        if secret:
-            cloud["API_SECRET"] = secret
 
 
 def status_for(key: str, saved: dict[str, str]) -> str:

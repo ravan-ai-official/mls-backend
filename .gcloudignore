@@ -1,0 +1,34 @@
+# Files uploaded with `gcloud builds submit` — mirror .dockerignore so we don't
+# ship local secrets / cruft to Cloud Build.
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+venv
+.venv
+
+.env
+.env.*
+!.env.example
+
+*.sqlite3
+media/
+staticfiles/
+
+reports/
+estate-import-review.txt
+
+node_modules
+
+.vercel
+Dockerfile.dev

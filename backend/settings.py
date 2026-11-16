@@ -44,6 +44,12 @@ IS_VERCEL = os.environ.get("VERCEL") == "1" or bool(os.environ.get("VERCEL_ENV")
 LOCAL_NETWORK_IP = os.environ.get("LOCAL_NETWORK_IP", "192.168.1.29")
 
 ALLOWED_HOSTS = ['staging.vsell4u.ca', 'localhost', '127.0.0.1', '.vercel.app', LOCAL_NETWORK_IP]
+_EXTRA_ALLOWED_HOSTS = [h.strip() for h in os.environ.get('DJANGO_ALLOWED_HOSTS', '').split(',') if h.strip()]
+ALLOWED_HOSTS.extend(_EXTRA_ALLOWED_HOSTS)
+
+# Trust Caddy's X-Forwarded-Proto so request.is_secure() + CSRF see HTTPS.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
 
 
 # Application definition
@@ -65,8 +71,6 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "drf_spectacular",
-    "cloudinary",
-    "cloudinary_storage",
 ]
 
 MIDDLEWARE = [
@@ -119,7 +123,10 @@ DATABASES = {
     'default': dj_database_url.config(
         default=_database_url,
         conn_max_age=600,
-        ssl_require=_database_url.startswith(("postgres://", "postgresql://")),
+        ssl_require=(
+            _database_url.startswith(("postgres://", "postgresql://"))
+            and "sslmode=disable" not in _database_url
+        ),
     )
 }
 
@@ -240,28 +247,12 @@ USE_TZ = True
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
-# Cloudinary Storage
-CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    'API_KEY': os.environ.get('CLOUDINARY_API_KEY'),
-    'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET'),
-}
-
-# Estate image uploads are intentionally Cloudinary-only.  Keeping this
-# separate from the default storage setting prevents an admin upload from
-# quietly landing on a transient application filesystem.
 ESTATE_IMAGE_MAX_UPLOAD_MB = int(os.environ.get("ESTATE_IMAGE_MAX_UPLOAD_MB", "10"))
 
-# Enable Cloudinary storage only when configuration is complete.
-# This avoids runtime failures when only partial credentials are present.
-_cloudinary_url = (os.environ.get("CLOUDINARY_URL") or "").strip()
-_cloudinary_complete = all(
-    [
-        (os.environ.get("CLOUDINARY_CLOUD_NAME") or "").strip(),
-        (os.environ.get("CLOUDINARY_API_KEY") or "").strip(),
-        (os.environ.get("CLOUDINARY_API_SECRET") or "").strip(),
-    ]
-)
+# Media storage: GCS when configured; otherwise FileSystemStorage (safe,
+# ephemeral on Cloud Run — don't rely on it in prod).
+_gcs_bucket = (os.environ.get("GS_BUCKET_NAME") or "").strip()
+
 if IS_VERCEL:
     _staticfiles_backend = "whitenoise.storage.CompressedStaticFilesStorage"
     WHITENOISE_USE_FINDERS = True
@@ -277,13 +268,27 @@ STORAGES = {
     },
 }
 
-if _cloudinary_url or _cloudinary_complete:
-    STORAGES["default"]["BACKEND"] = "cloudinary_storage.storage.MediaCloudinaryStorage"
-    # Keep compatibility with codepaths still checking this setting.
-    DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
+if _gcs_bucket:
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+        "OPTIONS": {
+            "bucket_name": _gcs_bucket,
+            "project_id": os.environ.get("GS_PROJECT_ID", "").strip() or None,
+            # Uniform bucket-level access forbids per-object ACLs; leave default
+            # ACL unset and make the bucket publicly readable at the IAM level.
+            "default_acl": None,
+            "querystring_auth": os.environ.get("GS_QUERYSTRING_AUTH", "False") == "True",
+            "file_overwrite": os.environ.get("GS_FILE_OVERWRITE", "False") == "True",
+            "location": os.environ.get("GS_LOCATION", "").strip(),
+        },
+    }
+    DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
+    _custom_domain = os.environ.get("GS_CUSTOM_DOMAIN", "").strip()
+    if _custom_domain:
+        STORAGES["default"]["OPTIONS"]["custom_domain"] = _custom_domain
 
-ESTATE_IMAGE_STORAGE_CONFIGURED = bool(_cloudinary_url or _cloudinary_complete)
-# Pre-construction projects use the same Cloudinary account for editor uploads.
+ESTATE_IMAGE_STORAGE_CONFIGURED = bool(_gcs_bucket)
+# Pre-construction projects reuse whatever media backend is active above.
 PRECON_ASSET_STORAGE_CONFIGURED = ESTATE_IMAGE_STORAGE_CONFIGURED
 PRECON_ASSET_MAX_UPLOAD_MB = int(os.environ.get("PRECON_ASSET_MAX_UPLOAD_MB", "25"))
 
@@ -326,6 +331,9 @@ CSRF_TRUSTED_ORIGINS = [
     "http://staging.vsell4u.ca",
     "https://mls-frontend-v2.vercel.app",
 ]
+CSRF_TRUSTED_ORIGINS.extend(
+    f"https://{h}" for h in _EXTRA_ALLOWED_HOSTS if h and not h.startswith('.') and not h.replace('.', '').isdigit()
+)
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -461,7 +469,7 @@ ESTATE_DOCUMENT_ALLOWED_HOSTS = [
     host.strip().lower()
     for host in os.environ.get(
         "ESTATE_DOCUMENT_ALLOWED_HOSTS",
-        "estate-4u.com,res.cloudinary.com",
+        "estate-4u.com,storage.googleapis.com",
     ).split(",")
     if host.strip()
 ]

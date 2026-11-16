@@ -329,7 +329,7 @@ class EstateProperty(models.Model):
         if self.featured_image:
             if not settings.ESTATE_IMAGE_STORAGE_CONFIGURED:
                 raise ValidationError(
-                    {"featured_image": "Cloudinary must be configured before uploading estate images."}
+                    {"featured_image": "Media storage must be configured before uploading estate images."}
                 )
             validate_estate_image(self.featured_image)
 
@@ -392,7 +392,7 @@ class EstatePropertyImage(models.Model):
     def clean(self):
         super().clean()
         if self.image and not settings.ESTATE_IMAGE_STORAGE_CONFIGURED:
-            raise ValidationError({"image": "Cloudinary must be configured before uploading estate images."})
+            raise ValidationError({"image": "Media storage must be configured before uploading estate images."})
 
     @property
     def image_url(self):
