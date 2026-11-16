@@ -369,9 +369,11 @@ class Command(BaseCommand):
         try:
             from django.core.management import call_command
 
+            # Omit --days so sync_ampre_closed runs incrementally when it
+            # already has a prior successful run, and only backfills on the
+            # very first invocation.
             call_command(
                 "sync_ampre_closed",
-                days=90,
                 max_rows_per_city=500,
                 stdout=self.stdout,
                 stderr=self.stderr,

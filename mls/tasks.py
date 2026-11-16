@@ -51,19 +51,22 @@ def sync_ddf_listing_cache() -> dict:
 def sync_ampre_inactive_listings() -> dict:
     """Pull Terminated/Expired/Closed from AMPRE. Enable via AMPRE_CLOSED_BEAT_ENABLED=1.
 
+    Runs incrementally by default: pulls rows modified since the last
+    successful run (6h overlap). First invocation does a 90-day backfill.
+    Set AMPRE_CLOSED_DAYS to force an explicit backfill window.
+
     Tunable via env vars:
-      AMPRE_CLOSED_DAYS               - look-back window (default 90)
+      AMPRE_CLOSED_DAYS               - force explicit backfill window in days
+                                        (unset = incremental)
       AMPRE_CLOSED_MAX_ROWS_PER_CITY  - cap per city per status family (default 800)
     """
     import os
     from django.core.management import call_command
 
-    days = int(os.environ.get("AMPRE_CLOSED_DAYS", "90"))
     max_rows = int(os.environ.get("AMPRE_CLOSED_MAX_ROWS_PER_CITY", "800"))
+    kwargs = {"max_rows_per_city": max_rows}
+    if "AMPRE_CLOSED_DAYS" in os.environ:
+        kwargs["days"] = int(os.environ["AMPRE_CLOSED_DAYS"])
 
-    call_command(
-        "sync_ampre_closed",
-        days=days,
-        max_rows_per_city=max_rows,
-    )
+    call_command("sync_ampre_closed", **kwargs)
     return {"ok": True}
