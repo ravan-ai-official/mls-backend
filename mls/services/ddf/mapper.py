@@ -178,18 +178,11 @@ def map_property_defaults(data):
 
         # Building measurements
         "parking_total": safe_int(data.get("ParkingTotal")),
-        "garages": safe_int(
-            data.get("GarageSpaces")
-            if data.get("GarageSpaces") is not None
-            else data.get("CoveredSpaces")
-        ),
-        "garage_size": safe_str(data.get("GarageType"))
-        or safe_list(data.get("GarageType")),
-        "kitchens": safe_int(
-            data.get("NumberOfKitchens")
-            if data.get("NumberOfKitchens") is not None
-            else data.get("KitchensTotalInteger")
-        ),
+        # garages / garage_size / kitchens exist on EstateProperty, not on
+        # the Property model DDF writes to. Previously these keys crashed
+        # Property(**defaults) on first-ever seed; silently dropped on
+        # update via setattr(). Omit entirely until a Property migration
+        # adds the columns.
         "year_built": safe_int(data.get("YearBuilt"))
         or _year_from_approximate_age(data.get("ApproximateAge"))
         or _year_from_approximate_age(data.get("PropertyAge"))
