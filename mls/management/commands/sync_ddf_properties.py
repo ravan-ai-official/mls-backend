@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import timedelta
 
@@ -35,8 +36,13 @@ class Command(BaseCommand):
 
     # Active listings older than this are pruned. Sold / de-listed rows
     # use INACTIVE_RETENTION_DAYS so the Sold and De-listed tabs keep data.
+    # Override with env DDF_INACTIVE_RETENTION_DAYS; 0 disables age-based
+    # pruning of Sold / De-listed entirely (they can still be dropped by
+    # the storage-cap prune — raise --max-storage-mb accordingly).
     CACHE_RETENTION_DAYS = 1
-    INACTIVE_RETENTION_DAYS = 90
+    INACTIVE_RETENTION_DAYS = int(
+        os.environ.get("DDF_INACTIVE_RETENTION_DAYS", "90")
+    )
 
     INCREMENTAL_OVERLAP_MINUTES = 10
 
@@ -76,8 +82,20 @@ class Command(BaseCommand):
             "--full",
             action="store_true",
             help=(
-                "Unsupported: this cache intentionally never imports "
-                "the full catalogue."
+                "Fetch the entire catalogue, ignoring the incremental "
+                "watermark. Use for manual full resyncs."
+            ),
+        )
+
+        parser.add_argument(
+            "--window-hours",
+            type=int,
+            default=0,
+            help=(
+                "Fetch listings modified in the last N hours. "
+                "Overrides the default watermark-based incremental. "
+                "0 (default) keeps watermark behavior. The scheduled "
+                "Celery task passes 24."
             ),
         )
 
@@ -211,10 +229,14 @@ class Command(BaseCommand):
         if options.get("dry_run"):
             return self._dry_run()
 
-        if options["full"]:
+        if options["full"] and options["window_hours"]:
             raise CommandError(
-                "Full DDF imports are disabled because the database "
-                "is limited to a small rolling cache."
+                "--full and --window-hours are mutually exclusive."
+            )
+
+        if options["window_hours"] < 0:
+            raise CommandError(
+                "--window-hours must be >= 0."
             )
 
         retention_days = options["retention_days"]
@@ -292,13 +314,32 @@ class Command(BaseCommand):
             )
 
         else:
-            filter_expression = (
-                self.build_incremental_filter()
-            )
-
             max_pages = options["max_pages"]
 
-            if cache_is_empty:
+            if options["full"]:
+                filter_expression = None
+                self.stdout.write(
+                    "--full: fetching the entire catalogue "
+                    f"(cap: {max_pages or 'none'} pages)."
+                )
+            elif options["window_hours"]:
+                cutoff = timezone.now() - timedelta(
+                    hours=options["window_hours"]
+                )
+                filter_expression = (
+                    "ModificationTimestamp gt "
+                    f"{cutoff.isoformat()}"
+                )
+                self.stdout.write(
+                    f"--window-hours={options['window_hours']}: "
+                    f"fetching listings modified since {cutoff.isoformat()}."
+                )
+            else:
+                filter_expression = (
+                    self.build_incremental_filter()
+                )
+
+            if cache_is_empty and not options["full"]:
                 # First-ever seed: pull the full catalogue, no 25-page cap.
                 # Only an explicit --max-pages still bounds it (for testing).
                 filter_expression = None
@@ -743,6 +784,12 @@ class Command(BaseCommand):
         Prune oldest DDF cache records until the database is
         below the configured storage limit.
         """
+        if os.environ.get("DDF_DISABLE_PRUNING", "0") == "1":
+            self.stdout.write(
+                "DDF_DISABLE_PRUNING=1 — skipping storage-cap prune."
+            )
+            return
+
         limit_bytes = (
             max_storage_mb
             * 1024
@@ -834,6 +881,9 @@ class Command(BaseCommand):
         disappears. Without this step, those rows keep showing "For Sale"
         at a stale price (the HouseSigma mismatch we saw on C14096360).
         """
+        if os.environ.get("DDF_DISABLE_PRUNING", "0") == "1":
+            return
+
         # Give incremental sync a little room past the retention window.
         cutoff = timezone.now() - timedelta(days=max(int(retention_days), 1))
         stale = (
@@ -866,6 +916,12 @@ class Command(BaseCommand):
         otherwise be deleted within ``retention_days`` and the Sold /
         De-listed tabs would always show zero.
         """
+        if os.environ.get("DDF_DISABLE_PRUNING", "0") == "1":
+            self.stdout.write(
+                "DDF_DISABLE_PRUNING=1 — skipping age-based prune."
+            )
+            return
+
         from mls.services.query_helpers import STATUS_GROUPS
 
         now = timezone.now()
@@ -896,21 +952,23 @@ class Command(BaseCommand):
             )
 
         # Sold / de-listed — longer retention so tabs stay populated.
-        inactive_stale = (
-            Property.objects.filter(category_type=Property.DDF)
-            .filter(inactive_q)
-            .filter(
-                Q(modification_timestamp__lt=inactive_cutoff)
-                | Q(modification_timestamp__isnull=True)
+        # 0 disables age-based pruning entirely (keep forever).
+        if self.INACTIVE_RETENTION_DAYS > 0:
+            inactive_stale = (
+                Property.objects.filter(category_type=Property.DDF)
+                .filter(inactive_q)
+                .filter(
+                    Q(modification_timestamp__lt=inactive_cutoff)
+                    | Q(modification_timestamp__isnull=True)
+                )
             )
-        )
-        inactive_count = inactive_stale.count()
-        if inactive_count:
-            inactive_stale.delete()
-            self.stdout.write(
-                f"Deleted {inactive_count:,} Sold/De-listed DDF listings older than "
-                f"{self.INACTIVE_RETENTION_DAYS} days."
-            )
+            inactive_count = inactive_stale.count()
+            if inactive_count:
+                inactive_stale.delete()
+                self.stdout.write(
+                    f"Deleted {inactive_count:,} Sold/De-listed DDF listings older than "
+                    f"{self.INACTIVE_RETENTION_DAYS} days."
+                )
 
     def cleanup_orphaned_properties(
         self,
@@ -1449,14 +1507,17 @@ class Command(BaseCommand):
         return result
 
 
-# Normal incremental sync:
+# Normal incremental sync (default — watermark-based):
 # python manage.py sync_ddf_properties --batch-size 8000
+#
+# Manual full resync (entire catalogue):
+# python manage.py sync_ddf_properties --full --batch-size 8000 --max-storage-mb 16000
+#
+# Scheduled 24h window (what the Celery task uses):
+# python manage.py sync_ddf_properties --window-hours 24 --batch-size 8000
 #
 # Testing with a page cap:
 # python manage.py sync_ddf_properties --max-pages 1 --batch-size 500
 #
 # Priority GTA/Ontario cache:
 # python manage.py sync_ddf_properties --priority-cache
-#
-# NOTE:
-# --full is intentionally unsupported for this rolling-cache architecture.

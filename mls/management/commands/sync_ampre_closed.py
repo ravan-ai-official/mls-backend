@@ -133,6 +133,26 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
+            "--full",
+            action="store_true",
+            help=(
+                "Fetch all historical Closed / De-listed listings available "
+                "from AMPRE (ignores incremental watermark and --days / "
+                "--window-hours). Use for manual full resyncs."
+            ),
+        )
+        parser.add_argument(
+            "--window-hours",
+            type=int,
+            default=0,
+            help=(
+                "Fetch listings modified in the last N hours. Overrides the "
+                "default incremental/backfill behavior. 0 (default) keeps "
+                "the existing watermark logic. The scheduled Celery task "
+                "passes 24."
+            ),
+        )
+        parser.add_argument(
             "--days",
             type=int,
             default=None,
@@ -184,8 +204,49 @@ class Command(BaseCommand):
             else ListingSyncStatus.objects.filter(key="ampre_closed").first()
         )
         explicit_days = options["days"] is not None
+        full_sync = bool(options.get("full"))
+        window_hours = int(options.get("window_hours") or 0)
 
-        if explicit_days or not last_status:
+        if full_sync and (explicit_days or window_hours):
+            from django.core.management.base import CommandError
+            raise CommandError(
+                "--full is mutually exclusive with --days and --window-hours."
+            )
+        if window_hours < 0:
+            from django.core.management.base import CommandError
+            raise CommandError("--window-hours must be >= 0.")
+
+        if full_sync:
+            # Huge look-back window → effectively "everything AMPRE has".
+            days = 36500  # ~100 years
+            today = timezone.now().date()
+            start = (today - timedelta(days=days)).isoformat()
+            end = (today + timedelta(days=1)).isoformat()
+            self.stdout.write(
+                f"AMPRE --full: pulling all history (window={days} days). "
+                f"Per-city cap = {max_rows} rows."
+            )
+            plan = self._backfill_plan(start=start, end=end, row_cap=max_rows)
+            if dry_run:
+                plan = [p for p in plan if p[1] == "Toronto"][:1]
+                plan = [(p[0], p[1], p[2], p[3], sample_size) for p in plan]
+        elif window_hours:
+            incremental_since = timezone.now() - timedelta(hours=window_hours)
+            ts = (
+                incremental_since.replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            self.stdout.write(
+                f"AMPRE --window-hours={window_hours}: "
+                f"ModificationTimestamp >= {ts} "
+                f"(GTA-wide, 2 queries, cap = {self.INCREMENTAL_MAX_ROWS})."
+            )
+            plan = self._incremental_plan(ts=ts)
+            if dry_run:
+                plan = plan[:1]
+                plan = [(p[0], p[1], p[2], p[3], sample_size) for p in plan]
+        elif explicit_days or not last_status:
             days = max(1, int(options["days"] or self.DEFAULT_BACKFILL_DAYS))
             today = timezone.now().date()
             start = (today - timedelta(days=days)).isoformat()

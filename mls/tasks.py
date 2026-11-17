@@ -26,7 +26,11 @@ def run_saved_search_alerts() -> dict:
 def sync_ddf_listing_cache() -> dict:
     """Incremental DDF sync + expire ghost Actives. Enable via DDF_SYNC_BEAT_ENABLED=1.
 
+    Pulls listings created/modified in the last DDF_SYNC_WINDOW_HOURS hours
+    (default 24). Manual full resyncs should use `--full` directly.
+
     Tunable via env vars so the daily schedule doesn't need code changes:
+      DDF_SYNC_WINDOW_HOURS     - how many hours back to pull (default 24)
       DDF_SYNC_RETENTION_DAYS   - keep Active rows seen in the last N days (default 2)
       DDF_SYNC_MAX_STORAGE_MB   - prune oldest rows to stay under this cap (default 8000)
       DDF_SYNC_BATCH_SIZE       - DB write batch size (default 5000)
@@ -34,12 +38,14 @@ def sync_ddf_listing_cache() -> dict:
     import os
     from django.core.management import call_command
 
+    window_hours = int(os.environ.get("DDF_SYNC_WINDOW_HOURS", "24"))
     retention_days = int(os.environ.get("DDF_SYNC_RETENTION_DAYS", "2"))
     max_storage_mb = int(os.environ.get("DDF_SYNC_MAX_STORAGE_MB", "8000"))
     batch_size = int(os.environ.get("DDF_SYNC_BATCH_SIZE", "5000"))
 
     call_command(
         "sync_ddf_properties",
+        window_hours=window_hours,
         retention_days=retention_days,
         max_storage_mb=max_storage_mb,
         batch_size=batch_size,
@@ -51,22 +57,22 @@ def sync_ddf_listing_cache() -> dict:
 def sync_ampre_inactive_listings() -> dict:
     """Pull Terminated/Expired/Closed from AMPRE. Enable via AMPRE_CLOSED_BEAT_ENABLED=1.
 
-    Runs incrementally by default: pulls rows modified since the last
-    successful run (6h overlap). First invocation does a 90-day backfill.
-    Set AMPRE_CLOSED_DAYS to force an explicit backfill window.
+    Pulls listings modified in the last AMPRE_CLOSED_WINDOW_HOURS hours
+    (default 24). Manual full resyncs should use `--full` directly.
 
     Tunable via env vars:
-      AMPRE_CLOSED_DAYS               - force explicit backfill window in days
-                                        (unset = incremental)
+      AMPRE_CLOSED_WINDOW_HOURS       - how many hours back to pull (default 24)
       AMPRE_CLOSED_MAX_ROWS_PER_CITY  - cap per city per status family (default 800)
     """
     import os
     from django.core.management import call_command
 
+    window_hours = int(os.environ.get("AMPRE_CLOSED_WINDOW_HOURS", "24"))
     max_rows = int(os.environ.get("AMPRE_CLOSED_MAX_ROWS_PER_CITY", "800"))
-    kwargs = {"max_rows_per_city": max_rows}
-    if "AMPRE_CLOSED_DAYS" in os.environ:
-        kwargs["days"] = int(os.environ["AMPRE_CLOSED_DAYS"])
 
-    call_command("sync_ampre_closed", **kwargs)
+    call_command(
+        "sync_ampre_closed",
+        window_hours=window_hours,
+        max_rows_per_city=max_rows,
+    )
     return {"ok": True}
