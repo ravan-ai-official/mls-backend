@@ -172,10 +172,18 @@ class Command(BaseCommand):
 
         The overlap window helps avoid missing records modified close
         to the boundary between two sync runs.
+
+        We anchor on Active rows only — sync_ampre_closed writes rows
+        with category_type=DDF too, so filtering by category alone would
+        anchor DDF's incremental on AMPRE inactive rows' timestamps and
+        skip genuine DDF updates.
         """
         latest_property = (
             Property.objects
-            .filter(category_type=Property.DDF)
+            .filter(
+                category_type=Property.DDF,
+                standard_status="Active",
+            )
             .order_by("-modification_timestamp")
             .first()
         )
@@ -240,8 +248,13 @@ class Command(BaseCommand):
             max_storage_mb
         )
 
+        # Active-only check: AMPRE inactive rows share category_type=ddf
+        # but don't count as "DDF cache populated." Without this filter,
+        # 88 AMPRE-sourced inactive rows fool DDF into skipping its first-
+        # ever Active catalogue seed.
         cache_is_empty = not Property.objects.filter(
-            category_type=Property.DDF
+            category_type=Property.DDF,
+            standard_status="Active",
         ).exists()
 
         token = get_access_token()
