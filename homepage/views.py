@@ -124,9 +124,18 @@ class MarketDealsView(PublicView):
 
 class SoldBelowPurchaseView(PublicView):
     def get(self, request):
+        from mls.services.visitor_place import cities_for_request
+
         limit = _int_param(request, "limit", 3, 1, 12)
+        cities = cities_for_request(request)
         city = (request.query_params.get("city") or "").strip() or None
-        return Response(feeds.sold_below_purchase(limit=limit, city=city))
+        return Response(
+            feeds.sold_below_purchase(
+                limit=limit,
+                city=city,
+                cities=cities or None,
+            )
+        )
 
 
 class MarketSnapshotView(PublicView):
@@ -156,6 +165,18 @@ class NearbyActivityView(PublicView):
         since = timezone.now() - timedelta(days=30)
         results = listings_near(lat, lng, radius, since=since, limit=limit)
         return Response({"results": [item.__dict__ for item in results], "radius_km": radius})
+
+
+class NeighbourActivityView(PublicView):
+    """Mixed Just Listed / Price Drop / Open House / Sold cards for the
+    homepage neighbour-alerts preview. Prefers visitor cities."""
+
+    def get(self, request):
+        from mls.services.visitor_place import cities_for_request
+
+        limit = _int_param(request, "limit", 4, 1, 12)
+        cities = cities_for_request(request)
+        return Response(feeds.neighbour_activity(limit=limit, cities=cities or None))
 
 
 # --------------------------------------------------------------------------

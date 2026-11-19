@@ -1,4 +1,4 @@
-﻿import requests
+import requests
 import hashlib
 import os
 import json
@@ -1461,15 +1461,17 @@ class RecommendationTrackAPIView(APIView):
 class PropertyTypesAPIView(APIView):
     """
     GET /api/mls/properties/property-types/
-    Returns available property_sub_type values with counts.
-    Optional query params:
+    Returns UI home-type counts (Detached / Semi-Detached / Townhome / Condo)
+    plus Luxury ($2M+ active sales) and Rental (active leases). Optional:
       - province (comma-separated province codes, e.g. ON,QC)
       - listing_type: all | exclusive | lease | precon | community
     """
 
     def get(self, request):
+        from mls.services.query_helpers import HOME_TYPE_Q
+
         params = request.query_params
-        cache_key = _build_query_params_cache_key("property-types", params)
+        cache_key = _build_query_params_cache_key("property-types-ui", params)
         cached_payload = cache.get(cache_key)
         if cached_payload is not None:
             return Response(cached_payload, status=status.HTTP_200_OK)
@@ -1498,21 +1500,62 @@ class PropertyTypesAPIView(APIView):
                 Q(intro__contains="exclusive") | Q(category_type=Property.EXCLUSIVE)
             )
 
-        type_rows = (
-            qs.exclude(property_sub_type__isnull=True)
-            .exclude(property_sub_type__exact="")
-            .values("property_sub_type")
-            .annotate(count=Count("id"))
-            .order_by("-count", "property_sub_type")
+        sale_qs = qs.filter(
+            standard_status__iexact="Active",
+            list_price__gt=0,
+            lease_amount__isnull=True,
+            total_actual_rent__isnull=True,
         )
+        rental_qs = qs.filter(standard_status__iexact="Active").filter(
+            Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0)
+        )
+
+        counts = sale_qs.aggregate(
+            detached=Count("id", filter=HOME_TYPE_Q["detached"]),
+            semi=Count("id", filter=HOME_TYPE_Q["semi"]),
+            townhome=Count("id", filter=HOME_TYPE_Q["townhouse"]),
+            condo=Count("id", filter=HOME_TYPE_Q["condo"]),
+            luxury=Count("id", filter=Q(list_price__gte=2_000_000)),
+        )
+        rental_count = rental_qs.count()
 
         results = [
             {
-                "value": row["property_sub_type"],
-                "label": row["property_sub_type"],
-                "count": row["count"],
-            }
-            for row in type_rows
+                "value": "Detached",
+                "label": "Detached",
+                "count": counts["detached"] or 0,
+                "ui_type": "Detached",
+            },
+            {
+                "value": "Semi-Detached",
+                "label": "Semi-Detached",
+                "count": counts["semi"] or 0,
+                "ui_type": "Semi-Detached",
+            },
+            {
+                "value": "Townhome",
+                "label": "Townhome",
+                "count": counts["townhome"] or 0,
+                "ui_type": "Townhome",
+            },
+            {
+                "value": "Condo",
+                "label": "Condo",
+                "count": counts["condo"] or 0,
+                "ui_type": "Condo",
+            },
+            {
+                "value": "Luxury",
+                "label": "Luxury",
+                "count": counts["luxury"] or 0,
+                "ui_type": "Luxury",
+            },
+            {
+                "value": "Rental",
+                "label": "Rental",
+                "count": rental_count,
+                "ui_type": "Rental",
+            },
         ]
 
         payload = {"results": results}
@@ -2021,21 +2064,23 @@ class FeaturedPropertiesAPIView(APIView):
     """
     GET /api/mls/properties/featured-properties/
 
-    Homepage Featured rail: listings an admin pinned (``is_featured``, in
-    ``featured_order``, until ``featured_until``) first, topped up with the
-    brokerage's exclusive listings when fewer than ``limit`` are pinned.
-    Sold and de-listed rows are left out of both.
+    Homepage Featured rail: admin pins first, then active listings in the
+    visitor's cities (search history / IP city), then exclusive fill.
+    Sold and de-listed rows are left out.
     """
 
     @extend_schema(
         summary="List featured properties",
         description=(
-            "Admin-pinned listings first (featured_order, then newest), then exclusive "
-            "listings to fill the rail. Each row carries featured_source: pinned | exclusive."
+            "Admin-pinned listings first (featured_order, then newest), then active "
+            "listings in cities=, then exclusive listings. Each row carries "
+            "featured_source: pinned | local | exclusive."
         ),
         parameters=[
             OpenApiParameter("limit", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Rail size, 1–24. Defaults to 6."),
-            OpenApiParameter("fill", OpenApiTypes.BOOL, OpenApiParameter.QUERY, required=False, description="Top up with exclusive listings. Defaults to true."),
+            OpenApiParameter("fill", OpenApiTypes.BOOL, OpenApiParameter.QUERY, required=False, description="Top up after pins. Defaults to true."),
+            OpenApiParameter("cities", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False, description="CSV of preferred cities from search history."),
+            OpenApiParameter("city", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False, description="Single preferred city."),
         ],
         responses={
             200: OpenApiResponse(response=inline_serializer(
@@ -2043,6 +2088,7 @@ class FeaturedPropertiesAPIView(APIView):
                 fields={
                     "count": serializers.IntegerField(),
                     "pinned_count": serializers.IntegerField(),
+                    "local_count": serializers.IntegerField(),
                     "results": PropertySerializer(many=True),
                 },
             )),
@@ -2051,13 +2097,17 @@ class FeaturedPropertiesAPIView(APIView):
         auth=[],
     )
     def get(self, request):
+        from .services.visitor_place import cities_for_request
+
         try:
             limit = max(1, min(int(request.query_params.get("limit", 6)), 24))
         except (TypeError, ValueError):
             return Response({"error": "limit must be an integer."}, status=400)
         fill = str(request.query_params.get("fill", "true")).lower() not in {"0", "false", "no"}
+        cities = cities_for_request(request)
+        city_key = ",".join(c.lower() for c in cities) or "-"
 
-        cache_key = f"featured-properties:{limit}:{int(fill)}"
+        cache_key = f"featured-properties:{limit}:{int(fill)}:{city_key}"
         cached_payload = cache.get(cache_key)
         if cached_payload is not None:
             return Response(cached_payload)
@@ -2071,10 +2121,28 @@ class FeaturedPropertiesAPIView(APIView):
             .order_by(F("featured_order").asc(nulls_last=True), *newest)[:limit]
         )
         rows = [(p, "pinned") for p in pinned]
+        used_ids = {p.id for p in pinned}
+        local_count = 0
+
+        if fill and len(rows) < limit and cities:
+            city_q = Q()
+            for city in cities:
+                city_q |= Q(city__istartswith=city)
+            local = list(
+                Property.objects.filter(standard_status__iexact="active")
+                .filter(city_q)
+                .exclude(id__in=used_ids)
+                .exclude(INACTIVE_STATUS_Q)
+                .order_by(*newest)[: limit - len(rows)]
+            )
+            rows += [(p, "local") for p in local]
+            used_ids.update(p.id for p in local)
+            local_count = len(local)
+
         if fill and len(rows) < limit:
             exclusive = (
                 Property.objects.filter(id__in=_exclusive_ids_qs())
-                .exclude(id__in=[p.id for p in pinned])
+                .exclude(id__in=used_ids)
                 .exclude(INACTIVE_STATUS_Q)
                 .order_by(*newest)[: limit - len(rows)]
             )
@@ -2085,7 +2153,13 @@ class FeaturedPropertiesAPIView(APIView):
             {**data, "featured_source": source}
             for data, (_, source) in zip(serializer.data, rows)
         ]
-        payload = {"count": len(results), "pinned_count": len(pinned), "results": results}
+        payload = {
+            "count": len(results),
+            "pinned_count": len(pinned),
+            "local_count": local_count,
+            "cities": cities,
+            "results": results,
+        }
         cache.set(cache_key, payload, FEATURED_CACHE_TTL_SECONDS)
         return Response(payload)
 
@@ -2815,28 +2889,11 @@ class ListingSyncStatusAPIView(APIView):
     """Reports the last fully successful DDF listing import."""
 
     permission_classes = [AllowAny]
-    CACHE_KEY = "listing-sync-status:v2"
 
     def get(self, request):
-        cached = cache.get(self.CACHE_KEY)
-        if cached is not None:
-            return Response(cached)
-        sync_status = ListingSyncStatus.objects.filter(
-            key="ddf_properties"
-        ).first()
-        payload = {
-            "last_successful_at": (
-                sync_status.last_successful_at if sync_status else None
-            ),
-            # Rows downloaded by the last run, NOT the catalogue size.
-            "listing_count": sync_status.listing_count if sync_status else 0,
-            # What the site can show right now: the figure for "N live listings".
-            "active_listing_count": Property.objects.filter(
-                standard_status__iexact="Active"
-            ).count(),
-        }
-        cache.set(self.CACHE_KEY, payload, 300)
-        return Response(payload)
+        from .services.listing_sync_status import cached_payload
+
+        return Response(cached_payload())
 
 
 class ListingCatalogStatsAPIView(APIView):

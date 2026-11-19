@@ -11,7 +11,7 @@ import logging
 from typing import Any, Iterable
 
 from django.core.cache import cache
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from mls.models import Media, Property
@@ -77,13 +77,61 @@ def _local_by_mls(mls_numbers: Iterable[str]) -> dict[str, str]:
     )
 
 
+def _ampre_primary_photos(mls_numbers: Iterable[str]) -> dict[str, str]:
+    """Preferred/first AMPRE MediaURL per TRREB MLS / ListingKey.
+
+    Price-drop deals come from AMPRE and often are not in the local DDF
+    catalogue yet, so ``_photos`` has nothing to join. Hitting Media for the
+    handful of ranked deals (typically ≤4) keeps the cards from rendering
+    blank while the listing sync catches up.
+    """
+    from mls.services.ampre_media import fetch_ampre_photos_for_listing_id
+
+    out: dict[str, str] = {}
+    for mls in mls_numbers:
+        key = (mls or "").strip()
+        if not key or key in out:
+            continue
+        try:
+            photos = fetch_ampre_photos_for_listing_id(key)
+        except AmpreClientError as exc:
+            logger.warning("AMPRE media miss for deal %s: %s", key, exc)
+            continue
+        if not photos:
+            continue
+        url = (photos[0].get("MediaURL") or "").strip()
+        if url:
+            out[key] = url
+    return out
+
+
 # --------------------------------------------------------------------------
 # High return properties
 # --------------------------------------------------------------------------
 
 
+def _investor_result_row(r: dict[str, Any], photos: dict[str, str], *, pinned: bool) -> dict[str, Any]:
+    return {
+        "listing_key": r["listing_key"],
+        "address": r["address"],
+        "city": base_city(r["city"]),
+        "bedrooms": r["bedrooms"],
+        "bathrooms": r["bathrooms"],
+        "list_price": to_float(r["price"]),
+        "image_url": photos.get(r["listing_key"]),
+        "estimated_monthly_rent": r["metrics"].estimated_monthly_rent,
+        "gross_yield_pct": r["metrics"].gross_yield_pct,
+        "cap_rate_pct": r["metrics"].cap_rate_pct,
+        "comps_used": r["metrics"].comps_used,
+        "source": "pinned" if pinned else "ranked",
+    }
+
+
 def investor_picks(limit: int = 3, city: str | None = None) -> dict[str, Any]:
     def build() -> dict[str, Any]:
+        from django.db.models import F
+
+        now = timezone.now()
         base = Property.objects.filter(standard_status__iexact="active").filter(_gta_q())
         # Rentals: a monthly rent and no sale price (how DDF carries leases).
         comps = [
@@ -91,15 +139,15 @@ def investor_picks(limit: int = 3, city: str | None = None) -> dict[str, Any]:
             for c, b, r in base.filter(total_actual_rent__gt=0, list_price__isnull=True)
             .values_list("city", "bedrooms_total", "total_actual_rent")
         ]
-        sales = base.filter(
-            list_price__gt=0,
-            bedrooms_total__gt=0,
-            bedrooms_total__lte=INVESTOR_MAX_BEDROOMS,
-            property_sub_type__in=RESIDENTIAL_SUB_TYPES,
+
+        pin_qs = (
+            Property.objects.filter(is_high_return=True, standard_status__iexact="active")
+            .filter(Q(high_return_until__isnull=True) | Q(high_return_until__gt=now))
+            .order_by(F("high_return_order").asc(nulls_last=True), "-listing_key")
         )
         if city:
-            sales = sales.filter(city__istartswith=city)
-        candidates = [
+            pin_qs = pin_qs.filter(city__istartswith=city)
+        pin_candidates = [
             {
                 "listing_key": row["listing_key"],
                 "address": row["unparsed_address"] or "",
@@ -111,31 +159,77 @@ def investor_picks(limit: int = 3, city: str | None = None) -> dict[str, Any]:
                 "condo_fee": row["association_fee"],
                 "condo_fee_frequency": row["association_fee_frequency"],
             }
-            for row in sales.order_by("-original_entry_timestamp").values(
-                "listing_key", "unparsed_address", "city", "bedrooms_total",
-                "bathrooms_total_integer", "list_price", "tax_annual_amount",
-                "association_fee", "association_fee_frequency",
-            )[:INVESTOR_CANDIDATE_POOL]
+            for row in pin_qs.values(
+                "listing_key",
+                "unparsed_address",
+                "city",
+                "bedrooms_total",
+                "bathrooms_total_integer",
+                "list_price",
+                "tax_annual_amount",
+                "association_fee",
+                "association_fee_frequency",
+            )[:limit]
         ]
-        ranked = rank_candidates(candidates, comps, limit)
-        photos = _photos(r["listing_key"] for r in ranked)
+        # Score pins for yield metrics but keep admin order (not yield rank).
+        pinned_rows: list[dict[str, Any]] = []
+        if pin_candidates:
+            scored_pins = {
+                row["listing_key"]: row
+                for row in rank_candidates(pin_candidates, comps, limit=len(pin_candidates))
+            }
+            pinned_rows = [
+                scored_pins[c["listing_key"]]
+                for c in pin_candidates
+                if c["listing_key"] in scored_pins
+            ]
+        pinned_keys = {r["listing_key"] for r in pinned_rows}
+
+        fill_needed = max(0, limit - len(pinned_rows))
+        ranked: list[dict[str, Any]] = []
+        if fill_needed:
+            sales = base.filter(
+                list_price__gt=0,
+                bedrooms_total__gt=0,
+                bedrooms_total__lte=INVESTOR_MAX_BEDROOMS,
+                property_sub_type__in=RESIDENTIAL_SUB_TYPES,
+            ).exclude(listing_key__in=pinned_keys)
+            if city:
+                sales = sales.filter(city__istartswith=city)
+            candidates = [
+                {
+                    "listing_key": row["listing_key"],
+                    "address": row["unparsed_address"] or "",
+                    "city": row["city"] or "",
+                    "bedrooms": row["bedrooms_total"],
+                    "bathrooms": row["bathrooms_total_integer"],
+                    "price": row["list_price"],
+                    "annual_tax": row["tax_annual_amount"],
+                    "condo_fee": row["association_fee"],
+                    "condo_fee_frequency": row["association_fee_frequency"],
+                }
+                for row in sales.order_by("-original_entry_timestamp").values(
+                    "listing_key",
+                    "unparsed_address",
+                    "city",
+                    "bedrooms_total",
+                    "bathrooms_total_integer",
+                    "list_price",
+                    "tax_annual_amount",
+                    "association_fee",
+                    "association_fee_frequency",
+                )[:INVESTOR_CANDIDATE_POOL]
+            ]
+            ranked = rank_candidates(candidates, comps, fill_needed)
+
+        combined = pinned_rows + ranked
+        photos = _photos(r["listing_key"] for r in combined)
         return {
             "results": [
-                {
-                    "listing_key": r["listing_key"],
-                    "address": r["address"],
-                    "city": base_city(r["city"]),
-                    "bedrooms": r["bedrooms"],
-                    "bathrooms": r["bathrooms"],
-                    "list_price": to_float(r["price"]),
-                    "image_url": photos.get(r["listing_key"]),
-                    "estimated_monthly_rent": r["metrics"].estimated_monthly_rent,
-                    "gross_yield_pct": r["metrics"].gross_yield_pct,
-                    "cap_rate_pct": r["metrics"].cap_rate_pct,
-                    "comps_used": r["metrics"].comps_used,
-                }
-                for r in ranked
+                _investor_result_row(r, photos, pinned=i < len(pinned_rows))
+                for i, r in enumerate(combined)
             ],
+            "pinned_count": len(pinned_rows),
             "calc_basis": CALC_BASIS,
             "generated_at": timezone.now().isoformat(),
         }
@@ -157,45 +251,229 @@ def market_deals(limit: int = 4) -> dict[str, Any]:
         deals = rank_price_drops(rows, limit)
         local = _local_by_mls(d.mls_number for d in deals)
         photos = _photos(local.values())
+        need_ampre = [
+            d.mls_number
+            for d in deals
+            if not photos.get(local.get(d.mls_number) or "")
+        ]
+        ampre_photos = _ampre_primary_photos(need_ampre) if need_ampre else {}
         results = []
         for deal in deals:
             key = local.get(deal.mls_number)
-            results.append({**deal.as_dict(), "listing_key": key, "image_url": photos.get(key) if key else None})
+            image = (photos.get(key) if key else None) or ampre_photos.get(deal.mls_number)
+            results.append({**deal.as_dict(), "listing_key": key, "image_url": image})
         return {"results": results, "generated_at": timezone.now().isoformat()}
 
     return _cached(f"home:deals:{limit}", DEALS_TTL, build)
 
 
 # --------------------------------------------------------------------------
-# Sold below last purchase (reads the table the nightly job fills)
+# Sold below last purchase (table first; local/AMPRE fill when empty)
 # --------------------------------------------------------------------------
 
 
-def sold_below_purchase(limit: int = 3, city: str | None = None) -> dict[str, Any]:
+def _sold_below_row(
+    *,
+    listing_key: str,
+    address: str,
+    city: str,
+    property_sub_type: str | None,
+    bedrooms: int | None,
+    bathrooms: int | None,
+    close_price: float,
+    close_date: str,
+    previous_close_price: float,
+    previous_close_date: str,
+    loss_amount: float,
+    image_url: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "listing_key": listing_key,
+        "address": address,
+        "city": city,
+        "property_sub_type": property_sub_type or "",
+        "bedrooms": bedrooms,
+        "bathrooms": bathrooms,
+        "close_price": close_price,
+        "close_date": close_date,
+        "previous_close_price": previous_close_price,
+        "previous_close_date": previous_close_date,
+        "loss_amount": loss_amount,
+        "image_url": image_url,
+    }
+
+
+def _sold_below_from_table(limit: int, cities: list[str] | None) -> tuple[list[dict[str, Any]], str | None]:
     from homepage.models import SoldBelowPurchase
 
     qs = SoldBelowPurchase.objects.all()
-    if city:
-        qs = qs.filter(city__iexact=city)
+    if cities:
+        city_q = Q()
+        for city in cities:
+            city_q |= Q(city__iexact=city) | Q(city__istartswith=city)
+        qs = qs.filter(city_q)
     rows = list(qs.order_by("-close_date")[:limit])
-    return {
-        "results": [
-            {
-                "listing_key": row.listing_key,
-                "address": row.address,
-                "city": row.city,
-                "property_sub_type": row.property_sub_type,
-                "bedrooms": row.bedrooms,
-                "bathrooms": row.bathrooms,
-                "close_price": float(row.close_price),
-                "close_date": row.close_date.isoformat(),
-                "previous_close_price": float(row.previous_close_price),
-                "previous_close_date": row.previous_close_date.isoformat(),
-                "loss_amount": float(row.loss_amount),
-            }
+    photos = _photos(row.listing_key for row in rows)
+    return (
+        [
+            _sold_below_row(
+                listing_key=row.listing_key,
+                address=row.address,
+                city=row.city,
+                property_sub_type=row.property_sub_type,
+                bedrooms=row.bedrooms,
+                bathrooms=row.bathrooms,
+                close_price=float(row.close_price),
+                close_date=row.close_date.isoformat(),
+                previous_close_price=float(row.previous_close_price),
+                previous_close_date=row.previous_close_date.isoformat(),
+                loss_amount=float(row.loss_amount),
+                image_url=photos.get(row.listing_key),
+            )
             for row in rows
         ],
-        "computed_at": rows[0].computed_at.isoformat() if rows else None,
+        rows[0].computed_at.isoformat() if rows else None,
+    )
+
+
+def _sold_below_from_local(limit: int, cities: list[str] | None) -> list[dict[str, Any]]:
+    """Repeat-sale losses from Closed rows already in the catalogue."""
+    from homepage.services.sold_below import find_repeat_sale_losses
+
+    qs = Property.objects.filter(
+        standard_status__iexact="Closed",
+        close_price__gt=0,
+        close_date__isnull=False,
+        unparsed_address__isnull=False,
+    ).exclude(unparsed_address="")
+    if cities:
+        city_q = Q()
+        for city in cities:
+            city_q |= Q(city__istartswith=city)
+        qs = qs.filter(city_q)
+    raw = [
+        {
+            "ListingKey": row["listing_key"],
+            "UnparsedAddress": row["unparsed_address"],
+            "City": row["city"] or "",
+            "PropertySubType": row["property_sub_type"] or "",
+            "BedroomsTotal": row["bedrooms_total"],
+            "BathroomsTotalInteger": row["bathrooms_total_integer"],
+            "ClosePrice": float(row["close_price"]),
+            "CloseDate": row["close_date"].isoformat(),
+        }
+        for row in qs.order_by("-close_date").values(
+            "listing_key",
+            "unparsed_address",
+            "city",
+            "property_sub_type",
+            "bedrooms_total",
+            "bathrooms_total_integer",
+            "close_price",
+            "close_date",
+        )[:12_000]
+    ]
+    losses = find_repeat_sale_losses(raw)[:limit]
+    photos = _photos(loss.listing_key for loss in losses)
+    return [
+        _sold_below_row(
+            listing_key=loss.listing_key,
+            address=loss.address,
+            city=loss.city,
+            property_sub_type=loss.property_sub_type,
+            bedrooms=loss.bedrooms,
+            bathrooms=loss.bathrooms,
+            close_price=loss.close_price,
+            close_date=loss.close_date.isoformat(),
+            previous_close_price=loss.previous_close_price,
+            previous_close_date=loss.previous_close_date.isoformat(),
+            loss_amount=loss.previous_close_price - loss.close_price,
+            image_url=photos.get(loss.listing_key),
+        )
+        for loss in losses
+    ]
+
+
+def _sold_below_from_ampre(limit: int, cities: list[str] | None) -> list[dict[str, Any]]:
+    """One-city AMPRE pull when the table and local catalogue have no pairs."""
+    from homepage.services.sold_below import find_repeat_sale_losses
+
+    targets = cities[:2] if cities else list(GTA_CITIES[:3])
+    cache_key = f"home:sold-below:live:{','.join(c.lower() for c in targets)}:{limit}"
+
+    def build() -> list[dict[str, Any]]:
+        raw: list[dict[str, Any]] = []
+        for city in targets:
+            try:
+                raw.extend(ampre.fetch_closed_sales(city, days=730, max_rows=8_000))
+            except AmpreClientError as exc:
+                logger.warning("Sold-below live AMPRE miss for %s: %s", city, exc)
+        losses = find_repeat_sale_losses(raw)[:limit]
+        photos = _photos(loss.listing_key for loss in losses)
+        return [
+            _sold_below_row(
+                listing_key=loss.listing_key,
+                address=loss.address,
+                city=loss.city,
+                property_sub_type=loss.property_sub_type,
+                bedrooms=loss.bedrooms,
+                bathrooms=loss.bathrooms,
+                close_price=loss.close_price,
+                close_date=loss.close_date.isoformat(),
+                previous_close_price=loss.previous_close_price,
+                previous_close_date=loss.previous_close_date.isoformat(),
+                loss_amount=loss.previous_close_price - loss.close_price,
+                image_url=photos.get(loss.listing_key),
+            )
+            for loss in losses
+        ]
+
+    return _cached(cache_key, 60 * 60, build)
+
+
+def sold_below_purchase(
+    limit: int = 3,
+    city: str | None = None,
+    cities: list[str] | None = None,
+) -> dict[str, Any]:
+    preferred = [c for c in (cities or ([city] if city else [])) if c]
+    rows, computed_at = _sold_below_from_table(limit, preferred or None)
+    source = "table"
+    if len(rows) < limit:
+        local = _sold_below_from_local(limit, preferred or None)
+        if local:
+            seen = {row["listing_key"] for row in rows}
+            for row in local:
+                if row["listing_key"] in seen:
+                    continue
+                rows.append(row)
+                seen.add(row["listing_key"])
+                if len(rows) >= limit:
+                    break
+            source = "table+local" if computed_at else "local"
+            computed_at = computed_at or timezone.now().isoformat()
+    if len(rows) < max(1, limit // 2):
+        try:
+            live = _sold_below_from_ampre(limit, preferred or None)
+        except Exception as exc:  # noqa: BLE001 — feed must degrade, not 500
+            logger.warning("Sold-below AMPRE fill failed: %s", exc)
+            live = []
+        if live:
+            seen = {row["listing_key"] for row in rows}
+            for row in live:
+                if row["listing_key"] in seen:
+                    continue
+                rows.append(row)
+                seen.add(row["listing_key"])
+                if len(rows) >= limit:
+                    break
+            source = f"{source}+ampre" if rows else "ampre"
+            computed_at = computed_at or timezone.now().isoformat()
+    return {
+        "results": rows[:limit],
+        "computed_at": computed_at,
+        "source": source,
+        "cities": preferred,
     }
 
 
@@ -233,3 +511,169 @@ def market_snapshot(scope: str = "gta") -> dict[str, Any]:
             raise FeedUnavailable(str(exc)) from exc
     age = (timezone.now() - snapshot.as_of).total_seconds()
     return {**snapshot.payload, "scope": scope, "as_of": snapshot.as_of.isoformat(), "stale": age > SNAPSHOT_MAX_AGE}
+
+# --------------------------------------------------------------------------
+# Neighbour activity preview (Just Listed / Price Drop / Open House / Sold)
+# --------------------------------------------------------------------------
+
+
+def neighbour_activity(limit: int = 4, cities: list[str] | None = None) -> dict[str, Any]:
+    """Mixed recent activity for the homepage neighbour-alerts panel.
+
+    Prefers visitor cities when provided; otherwise the wider GTA catalogue.
+    One card per event type when possible, then filled with newest listings so
+    the rail stays full. City-scoped misses fall back to GTA so personalization
+    never blanks the preview.
+    """
+    from mls.models import OpenHouse
+
+    preferred = [c for c in (cities or []) if c]
+    city_q = Q()
+    for city in preferred:
+        city_q |= Q(city__istartswith=city)
+    scope_q = city_q if preferred else _gta_q()
+
+    today = timezone.now().date()
+    picked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(event: str, prop: dict[str, Any], *, occurred_at, price: float | None) -> None:
+        key = prop.get("listing_key") or ""
+        if not key or key in seen or len(picked) >= limit:
+            return
+        seen.add(key)
+        picked.append(
+            {
+                "listing_key": key,
+                "event": event,
+                "address": (prop.get("unparsed_address") or "").split(",")[0].strip() or key,
+                "city": base_city(prop.get("city") or ""),
+                "list_price": price,
+                "occurred_at": occurred_at.isoformat()
+                if hasattr(occurred_at, "isoformat")
+                else occurred_at,
+                "image_url": None,
+            }
+        )
+
+    def first_row(base_qs, order, values):
+        scoped = base_qs.filter(scope_q).order_by(order)
+        row = scoped.values(*values).first()
+        if row or not preferred:
+            return row, scoped
+        wide = base_qs.filter(_gta_q()).order_by(order)
+        return wide.values(*values).first(), wide
+
+    listed_base = Property.objects.filter(
+        standard_status__iexact="Active",
+        list_price__gt=0,
+        original_entry_timestamp__isnull=False,
+    )
+    listed, listed_qs = first_row(
+        listed_base,
+        "-original_entry_timestamp",
+        ("listing_key", "unparsed_address", "city", "list_price", "original_entry_timestamp"),
+    )
+    if listed:
+        add(
+            "Just Listed",
+            listed,
+            occurred_at=listed["original_entry_timestamp"],
+            price=to_float(listed["list_price"]),
+        )
+
+    drop_base = Property.objects.filter(
+        standard_status__iexact="Active",
+        list_price__gt=0,
+        previous_list_price__gt=0,
+        price_change_timestamp__isnull=False,
+        list_price__lt=F("previous_list_price"),
+    )
+    drop, _ = first_row(
+        drop_base,
+        "-price_change_timestamp",
+        (
+            "listing_key",
+            "unparsed_address",
+            "city",
+            "list_price",
+            "previous_list_price",
+            "price_change_timestamp",
+        ),
+    )
+    if drop:
+        add(
+            "Price Drop",
+            drop,
+            occurred_at=drop["price_change_timestamp"],
+            price=to_float(drop["list_price"]),
+        )
+
+    oh_base = OpenHouse.objects.filter(
+        date__gte=today,
+        property__standard_status__iexact="Active",
+        property__list_price__gt=0,
+    )
+    oh_scope = Q()
+    cities_for_oh = preferred or list(GTA_CITIES)
+    for city in cities_for_oh:
+        oh_scope |= Q(property__city__istartswith=city)
+    open_house = (
+        oh_base.filter(oh_scope).select_related("property").order_by("date", "start_time").first()
+    )
+    if open_house is None and preferred:
+        gta_oh = Q()
+        for city in GTA_CITIES:
+            gta_oh |= Q(property__city__istartswith=city)
+        open_house = (
+            oh_base.filter(gta_oh).select_related("property").order_by("date", "start_time").first()
+        )
+    if open_house and open_house.property_id:
+        prop = open_house.property
+        add(
+            "Open House",
+            {
+                "listing_key": prop.listing_key,
+                "unparsed_address": prop.unparsed_address,
+                "city": prop.city,
+            },
+            occurred_at=open_house.date,
+            price=to_float(prop.list_price),
+        )
+
+    sold_base = Property.objects.filter(
+        standard_status__iexact="Closed",
+        close_price__gt=0,
+        close_date__isnull=False,
+    )
+    sold, _ = first_row(
+        sold_base,
+        "-close_date",
+        ("listing_key", "unparsed_address", "city", "close_price", "close_date"),
+    )
+    if sold:
+        add(
+            "Just Sold",
+            sold,
+            occurred_at=sold["close_date"],
+            price=to_float(sold["close_price"]),
+        )
+
+    if len(picked) < limit:
+        for row in listed_qs.values(
+            "listing_key", "unparsed_address", "city", "list_price", "original_entry_timestamp"
+        )[: limit * 4]:
+            add(
+                "Just Listed",
+                row,
+                occurred_at=row["original_entry_timestamp"],
+                price=to_float(row["list_price"]),
+            )
+            if len(picked) >= limit:
+                break
+
+    photos = _photos(item["listing_key"] for item in picked)
+    for item in picked:
+        item["image_url"] = photos.get(item["listing_key"])
+
+    return {"results": picked[:limit], "cities": preferred}
