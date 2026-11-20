@@ -102,15 +102,8 @@ def fetch_property_page(
             )
             response.raise_for_status()
         except requests.RequestException as exc:
-            # Include the AMPRE response body in the error — it names the
-            # offending field or filter when the request is a 400, which
-            # requests' default HTTPError message hides.
-            body = ""
-            resp = getattr(exc, "response", None)
-            if resp is not None:
-                body = (resp.text or "")[:500]
-            logger.warning("AMPRE Property fetch failed: %s | body: %s", exc, body)
-            raise AmpreClientError(f"{exc} | body: {body}") from exc
+            logger.warning("AMPRE Property fetch failed: %s", exc)
+            raise AmpreClientError(str(exc)) from exc
 
         data = response.json() or {}
         all_rows.extend(data.get("value") or [])

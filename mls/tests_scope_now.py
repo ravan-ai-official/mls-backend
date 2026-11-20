@@ -8,7 +8,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from mls.models import Content, PreconActivityEvent, PropertyInquiry
-from mls.services.ai_assist import _safe_href
+from mls.services.ai_assist import _keyword_links, _listings_search_href, _parse_intent, _safe_href
 from mls.services.inquiry_ghl import _format_inquiry_note, _inquiry_tags, sync_inquiry_to_ghl
 from mls.services.lead_ghl import push_lead_to_ghl
 
@@ -30,7 +30,7 @@ class AssistTests(TestCase):
         response = APIClient().post("/api/mls/ai/assist/", {"question": "  "}, format="json")
         self.assertEqual(response.status_code, 400)
 
-    @mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""})
+    @mock.patch.dict(os.environ, {"OPENAI_API_KEY": "", "GEMINI_API_KEY": ""}, clear=False)
     def test_fallback_links_stay_on_this_site(self):
         response = APIClient().post(
             "/api/mls/ai/assist/",
@@ -42,10 +42,46 @@ class AssistTests(TestCase):
         self.assertTrue(body["fallback"])
         self.assertTrue(body["links"])
         self.assertTrue(all(link["href"].startswith("/") for link in body["links"]))
+        self.assertTrue(any("/assignments" in link["href"] for link in body["links"]))
+
+    def test_listing_intent_builds_search_href(self):
+        intent = _parse_intent("3 bed condos in Vaughan")
+        self.assertEqual(intent["city"], "Vaughan")
+        self.assertEqual(intent["beds"], 3)
+        self.assertEqual(intent["home_type"], "Condo")
+        href = _listings_search_href(intent)
+        self.assertIn("city=Vaughan", href)
+        self.assertIn("beds=3", href)
+        self.assertIn("type=Condo", href)
+        links = _keyword_links("3 bed condos in Vaughan")
+        self.assertTrue(any(link["href"].startswith("/listings?") for link in links))
+
+    def test_ui_suggestion_chips_map_to_expected_pages(self):
+        condo = _parse_intent("3 bed condos in Vaughan")
+        self.assertTrue(condo["wants_listings"])
+        self.assertFalse(condo["wants_precon"])
+
+        precon = _parse_intent("Pre-construction near Toronto")
+        self.assertTrue(precon["wants_precon"])
+        self.assertFalse(precon["wants_listings"])
+        precon_links = _keyword_links("Pre-construction near Toronto")
+        self.assertTrue(any(link["href"].startswith("/preconstruction") for link in precon_links))
+        self.assertTrue(any("city=Toronto" in link["href"] for link in precon_links))
+
+        market = _keyword_links("Show market trends")
+        self.assertEqual(market[0]["href"], "/market-trends")
+
+        assignment = _parse_intent("Assignments for sale")
+        self.assertTrue(assignment["wants_assignments"])
+        self.assertFalse(assignment["wants_listings"])
+        assignment_links = _keyword_links("Assignments for sale")
+        self.assertTrue(all(not link["href"].startswith("/listings") for link in assignment_links))
+        self.assertTrue(any(link["href"].startswith("/assignments") for link in assignment_links))
 
     def test_drops_external_links(self):
         self.assertIsNone(_safe_href("https://example.com/listings"))
         self.assertEqual(_safe_href("/listings?city=Vaughan"), "/listings?city=Vaughan")
+        self.assertEqual(_safe_href("/contact"), "/contact")
 
 
 class PreconActivityTests(TestCase):

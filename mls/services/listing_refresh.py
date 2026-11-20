@@ -214,7 +214,7 @@ def refresh_listing_from_ampre(prop: Property) -> Property | None:
         return None
 
     if not rows:
-        # Gone from AMPRE too ΓÇö treat as off-market rather than forever-Active.
+        # Gone from AMPRE too — treat as off-market rather than forever-Active.
         if listing_is_stale_active(prop):
             prop.standard_status = "Expired"
             prop.status_change_timestamp = timezone.now()

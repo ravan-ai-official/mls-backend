@@ -34,7 +34,30 @@ INVESTOR_CANDIDATE_POOL = 600
 # rental comps are whole-building rents; they swamp the ranking with yields
 # a typical investor can't reproduce, so the feed sticks to 1–5 bedrooms.
 INVESTOR_MAX_BEDROOMS = 5
-RESIDENTIAL_SUB_TYPES = ("Single Family", "Multi-family")
+# DDF / PropTX residential labels used in the live GTA catalogue. The old
+# ("Single Family", "Multi-family") pair matched almost nothing, so the rail
+# stayed empty even when rents and sale inventory were plentiful.
+RESIDENTIAL_SUB_TYPES = (
+    "Detached",
+    "Semi-Detached",
+    "Att/Row/Townhouse",
+    "Condo Apartment",
+    "Condo Townhouse",
+    "Link",
+    "Duplex",
+    "Triplex",
+    "Fourplex",
+    "Multiplex",
+    "Detached Condo",
+    "Semi-Detached Condo",
+    "Common Element Condo",
+    "Single Family",
+    "Multi-family",
+)
+# Monthly rents often land in list_price too; anything below this is not a sale.
+MIN_SALE_PRICE = 150_000
+# Asking-rent sanity band for comps (monthly).
+RENT_COMP_RANGE = (500, 20_000)
 
 
 class FeedUnavailable(RuntimeError):
@@ -130,14 +153,23 @@ def _investor_result_row(r: dict[str, Any], photos: dict[str, str], *, pinned: b
 def investor_picks(limit: int = 3, city: str | None = None) -> dict[str, Any]:
     def build() -> dict[str, Any]:
         from django.db.models import F
+        from django.db.models.functions import Coalesce
 
         now = timezone.now()
         base = Property.objects.filter(standard_status__iexact="active").filter(_gta_q())
-        # Rentals: a monthly rent and no sale price (how DDF carries leases).
+        # Rentals: lease_amount OR total_actual_rent (DDF often also fills list_price
+        # with the monthly rent, so we must NOT require list_price IS NULL).
+        rent_lo, rent_hi = RENT_COMP_RANGE
+        rental_rows = (
+            base.filter(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
+            .annotate(rent_amount=Coalesce("lease_amount", "total_actual_rent"))
+            .filter(rent_amount__gte=rent_lo, rent_amount__lte=rent_hi)
+            .values_list("city", "bedrooms_total", "rent_amount")
+        )
         comps = [
             RentalComp(city=c or "", bedrooms=b, monthly_rent=float(r))
-            for c, b, r in base.filter(total_actual_rent__gt=0, list_price__isnull=True)
-            .values_list("city", "bedrooms_total", "total_actual_rent")
+            for c, b, r in rental_rows
+            if r is not None
         ]
 
         pin_qs = (
@@ -188,12 +220,17 @@ def investor_picks(limit: int = 3, city: str | None = None) -> dict[str, Any]:
         fill_needed = max(0, limit - len(pinned_rows))
         ranked: list[dict[str, Any]] = []
         if fill_needed:
-            sales = base.filter(
-                list_price__gt=0,
-                bedrooms_total__gt=0,
-                bedrooms_total__lte=INVESTOR_MAX_BEDROOMS,
-                property_sub_type__in=RESIDENTIAL_SUB_TYPES,
-            ).exclude(listing_key__in=pinned_keys)
+            # Sale homes only: exclude leases and monthly-rent-sized list prices.
+            sales = (
+                base.filter(
+                    list_price__gte=MIN_SALE_PRICE,
+                    bedrooms_total__gt=0,
+                    bedrooms_total__lte=INVESTOR_MAX_BEDROOMS,
+                    property_sub_type__in=RESIDENTIAL_SUB_TYPES,
+                    lease_amount__isnull=True,
+                    total_actual_rent__isnull=True,
+                ).exclude(listing_key__in=pinned_keys)
+            )
             if city:
                 sales = sales.filter(city__istartswith=city)
             candidates = [
@@ -234,7 +271,8 @@ def investor_picks(limit: int = 3, city: str | None = None) -> dict[str, Any]:
             "generated_at": timezone.now().isoformat(),
         }
 
-    return _cached(f"home:investor:{limit}:{(city or '').lower()}", INVESTOR_TTL, build)
+    # v2 busts the empty cache left by the old subtype / rental-comp filters.
+    return _cached(f"home:investor:v2:{limit}:{(city or '').lower()}", INVESTOR_TTL, build)
 
 
 # --------------------------------------------------------------------------
@@ -521,26 +559,151 @@ def neighbour_activity(limit: int = 4, cities: list[str] | None = None) -> dict[
     """Mixed recent activity for the homepage neighbour-alerts panel.
 
     Prefers visitor cities when provided; otherwise the wider GTA catalogue.
-    One card per event type when possible, then filled with newest listings so
-    the rail stays full. City-scoped misses fall back to GTA so personalization
-    never blanks the preview.
+    Builds a diverse set (Just Listed / Price Drop / Open House / Just Sold)
+    then backfills from whichever streams still have rows so the rail always
+    aims for ``limit`` cards — even when Active inventory is thin and only
+    Closed sales are available.
     """
     from mls.models import OpenHouse
+    from mls.services.query_helpers import STATUS_GROUPS
 
     preferred = [c for c in (cities or []) if c]
     city_q = Q()
     for city in preferred:
         city_q |= Q(city__istartswith=city)
     scope_q = city_q if preferred else _gta_q()
+    gta_q = _gta_q()
 
     today = timezone.now().date()
+    active_status_q = Q()
+    for status_value in STATUS_GROUPS["active"]:
+        active_status_q |= Q(standard_status__iexact=status_value)
+    sold_status_q = Q()
+    for status_value in STATUS_GROUPS["sold"]:
+        sold_status_q |= Q(standard_status__iexact=status_value)
+
+    # Sale-priced homes only — monthly rents often share list_price.
+    sale_priced = Q(
+        list_price__gte=MIN_SALE_PRICE,
+        lease_amount__isnull=True,
+        total_actual_rent__isnull=True,
+    )
+
+    def scoped_values(base_qs, order: str, values: tuple[str, ...], take: int) -> list[dict[str, Any]]:
+        """Prefer visitor cities, then fall back to GTA so personalization never blanks."""
+        take = max(take, 0)
+        if take == 0:
+            return []
+        rows = list(base_qs.filter(scope_q).order_by(order).values(*values)[:take])
+        if len(rows) >= take or not preferred:
+            return rows
+        seen_keys = {row.get("listing_key") for row in rows}
+        for row in base_qs.filter(gta_q).order_by(order).values(*values)[: take * 2]:
+            key = row.get("listing_key")
+            if not key or key in seen_keys:
+                continue
+            rows.append(row)
+            seen_keys.add(key)
+            if len(rows) >= take:
+                break
+        return rows[:take]
+
+    listed_rows = scoped_values(
+        Property.objects.filter(
+            active_status_q,
+            sale_priced,
+            original_entry_timestamp__isnull=False,
+        ),
+        "-original_entry_timestamp",
+        ("listing_key", "unparsed_address", "city", "list_price", "original_entry_timestamp"),
+        limit,
+    )
+    drop_rows = scoped_values(
+        Property.objects.filter(
+            active_status_q,
+            sale_priced,
+            previous_list_price__gte=MIN_SALE_PRICE,
+            price_change_timestamp__isnull=False,
+            list_price__lt=F("previous_list_price"),
+        ),
+        "-price_change_timestamp",
+        (
+            "listing_key",
+            "unparsed_address",
+            "city",
+            "list_price",
+            "previous_list_price",
+            "price_change_timestamp",
+        ),
+        limit,
+    )
+
+    oh_base = OpenHouse.objects.filter(
+        date__gte=today,
+        property__list_price__gte=MIN_SALE_PRICE,
+        property__lease_amount__isnull=True,
+        property__total_actual_rent__isnull=True,
+    ).filter(
+        # Open houses for active-status homes when available.
+        Q(property__standard_status__iexact="Active")
+        | Q(property__standard_status__iexact="Coming Soon")
+        | Q(property__standard_status__iexact="Pending")
+    )
+    oh_scope = Q()
+    for city in preferred or list(GTA_CITIES):
+        oh_scope |= Q(property__city__istartswith=city)
+    open_house_rows: list[dict[str, Any]] = []
+    oh_list = list(
+        oh_base.filter(oh_scope).select_related("property").order_by("date", "start_time")[:limit]
+    )
+    if not oh_list and preferred:
+        gta_oh = Q()
+        for city in GTA_CITIES:
+            gta_oh |= Q(property__city__istartswith=city)
+        oh_list = list(
+            oh_base.filter(gta_oh).select_related("property").order_by("date", "start_time")[:limit]
+        )
+    for open_house in oh_list:
+        prop = open_house.property
+        if not prop:
+            continue
+        open_house_rows.append(
+            {
+                "listing_key": prop.listing_key,
+                "unparsed_address": prop.unparsed_address,
+                "city": prop.city,
+                "list_price": prop.list_price,
+                "occurred_at": open_house.date,
+            }
+        )
+
+    sold_rows = scoped_values(
+        Property.objects.filter(
+            sold_status_q,
+            close_price__gt=0,
+            close_date__isnull=False,
+            # Exclude absurd future close dates that float to the top of -close_date.
+            close_date__lte=today,
+        ),
+        "-close_date",
+        ("listing_key", "unparsed_address", "city", "close_price", "close_date"),
+        max(limit, 8),
+    )
+
+    streams: list[tuple[str, list[dict[str, Any]], str, str]] = [
+        ("Just Listed", listed_rows, "original_entry_timestamp", "list_price"),
+        ("Price Drop", drop_rows, "price_change_timestamp", "list_price"),
+        ("Open House", open_house_rows, "occurred_at", "list_price"),
+        ("Just Sold", sold_rows, "close_date", "close_price"),
+    ]
+
     picked: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def add(event: str, prop: dict[str, Any], *, occurred_at, price: float | None) -> None:
+    def add(event: str, prop: dict[str, Any], *, occurred_at, price: float | None) -> bool:
         key = prop.get("listing_key") or ""
         if not key or key in seen or len(picked) >= limit:
-            return
+            return False
         seen.add(key)
         picked.append(
             {
@@ -555,122 +718,42 @@ def neighbour_activity(limit: int = 4, cities: list[str] | None = None) -> dict[
                 "image_url": None,
             }
         )
+        return True
 
-    def first_row(base_qs, order, values):
-        scoped = base_qs.filter(scope_q).order_by(order)
-        row = scoped.values(*values).first()
-        if row or not preferred:
-            return row, scoped
-        wide = base_qs.filter(_gta_q()).order_by(order)
-        return wide.values(*values).first(), wide
-
-    listed_base = Property.objects.filter(
-        standard_status__iexact="Active",
-        list_price__gt=0,
-        original_entry_timestamp__isnull=False,
-    )
-    listed, listed_qs = first_row(
-        listed_base,
-        "-original_entry_timestamp",
-        ("listing_key", "unparsed_address", "city", "list_price", "original_entry_timestamp"),
-    )
-    if listed:
+    # Pass 1: one card per event type for variety.
+    for event, rows, when_key, price_key in streams:
+        if not rows:
+            continue
+        row = rows[0]
         add(
-            "Just Listed",
-            listed,
-            occurred_at=listed["original_entry_timestamp"],
-            price=to_float(listed["list_price"]),
+            event,
+            row,
+            occurred_at=row.get(when_key) or row.get("occurred_at"),
+            price=to_float(row.get(price_key)),
         )
 
-    drop_base = Property.objects.filter(
-        standard_status__iexact="Active",
-        list_price__gt=0,
-        previous_list_price__gt=0,
-        price_change_timestamp__isnull=False,
-        list_price__lt=F("previous_list_price"),
-    )
-    drop, _ = first_row(
-        drop_base,
-        "-price_change_timestamp",
-        (
-            "listing_key",
-            "unparsed_address",
-            "city",
-            "list_price",
-            "previous_list_price",
-            "price_change_timestamp",
-        ),
-    )
-    if drop:
-        add(
-            "Price Drop",
-            drop,
-            occurred_at=drop["price_change_timestamp"],
-            price=to_float(drop["list_price"]),
-        )
-
-    oh_base = OpenHouse.objects.filter(
-        date__gte=today,
-        property__standard_status__iexact="Active",
-        property__list_price__gt=0,
-    )
-    oh_scope = Q()
-    cities_for_oh = preferred or list(GTA_CITIES)
-    for city in cities_for_oh:
-        oh_scope |= Q(property__city__istartswith=city)
-    open_house = (
-        oh_base.filter(oh_scope).select_related("property").order_by("date", "start_time").first()
-    )
-    if open_house is None and preferred:
-        gta_oh = Q()
-        for city in GTA_CITIES:
-            gta_oh |= Q(property__city__istartswith=city)
-        open_house = (
-            oh_base.filter(gta_oh).select_related("property").order_by("date", "start_time").first()
-        )
-    if open_house and open_house.property_id:
-        prop = open_house.property
-        add(
-            "Open House",
-            {
-                "listing_key": prop.listing_key,
-                "unparsed_address": prop.unparsed_address,
-                "city": prop.city,
-            },
-            occurred_at=open_house.date,
-            price=to_float(prop.list_price),
-        )
-
-    sold_base = Property.objects.filter(
-        standard_status__iexact="Closed",
-        close_price__gt=0,
-        close_date__isnull=False,
-    )
-    sold, _ = first_row(
-        sold_base,
-        "-close_date",
-        ("listing_key", "unparsed_address", "city", "close_price", "close_date"),
-    )
-    if sold:
-        add(
-            "Just Sold",
-            sold,
-            occurred_at=sold["close_date"],
-            price=to_float(sold["close_price"]),
-        )
-
-    if len(picked) < limit:
-        for row in listed_qs.values(
-            "listing_key", "unparsed_address", "city", "list_price", "original_entry_timestamp"
-        )[: limit * 4]:
-            add(
-                "Just Listed",
-                row,
-                occurred_at=row["original_entry_timestamp"],
-                price=to_float(row["list_price"]),
-            )
+    # Pass 2: round-robin the remaining rows so we always fill to ``limit``.
+    indexes = {event: 1 for event, _, _, _ in streams}
+    while len(picked) < limit:
+        progressed = False
+        for event, rows, when_key, price_key in streams:
+            idx = indexes[event]
+            while idx < len(rows) and len(picked) < limit:
+                row = rows[idx]
+                idx += 1
+                if add(
+                    event,
+                    row,
+                    occurred_at=row.get(when_key) or row.get("occurred_at"),
+                    price=to_float(row.get(price_key)),
+                ):
+                    progressed = True
+                    break
+            indexes[event] = idx
             if len(picked) >= limit:
                 break
+        if not progressed:
+            break
 
     photos = _photos(item["listing_key"] for item in picked)
     for item in picked:
