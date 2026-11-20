@@ -208,7 +208,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         start_time = time.time()
 
-        if options["full"]:
+        if options["full"] and options["window_hours"]:
             raise CommandError(
                 "--full and --window-hours are mutually exclusive."
             )

@@ -13,31 +13,59 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
 from .models import (
+    AccessToken,
+    Agent,
+    AgentServiceArea,
+    AIAssistLog,
     Attachment,
     Author,
+    CensusFSA,
+    CommunityListing,
     Content,
     ContentMeta,
-    EstateProject,
-    EstateProperty,
-    EstatePropertyImage,
-    Media,
-    PreComFloorPlanIntent,
-    PreComProperty,
-    Property,
-    PropertyInquiry,
-    Room,
-    Taxonomy,
-    UserFeedback,
     EstateAmenity,
+    EstateContentSection,
     EstateDepositInstallment,
     EstateDepositPlan,
     EstateDocument,
+    EstateDocumentIntent,
     EstateIncentive,
     EstatePrice,
     EstateProject,
+    EstateProperty,
+    EstatePropertyImage,
+    EstateSourceSnapshot,
     EstateUnitType,
+    ListingFirstSeen,
     ListingSubmission,
     ListingSubmissionMedia,
+    ListingSyncStatus,
+    ListingViewEvent,
+    MapAggregateCell,
+    Media,
+    NewsletterDelivery,
+    OpenHouse,
+    PreComFloorPlanIntent,
+    PreComProperty,
+    PreconActivityEvent,
+    Property,
+    PropertyEmbedding,
+    PropertyInquiry,
+    PropertyNote,
+    PropertySnapshot,
+    PropertySoldProxy,
+    Room,
+    SavedSearch,
+    SearchEvent,
+    Taxonomy,
+    UserAlertPreference,
+    UserFavorite,
+    UserFeedback,
+    UserFollowedArea,
+    UserHistory,
+    UserPropertyInteraction,
+    UserToured,
+    WebPushSubscription,
 )
 from .admin_ui import SectionedAdminMixin
 
@@ -292,6 +320,7 @@ class MediaInline(admin.TabularInline):
         "media_file",
     )
 
+@admin.register(Property)
 class PropertyAdmin(SectionedAdminMixin, admin.ModelAdmin):
     change_list_template = "admin/mls/property_change_list.html"
     list_display = (
@@ -455,18 +484,38 @@ class PropertyAdmin(SectionedAdminMixin, admin.ModelAdmin):
         self.message_user(request, f"Deleted {deleted_count} property records.")
 
 class RoomAdmin(SectionedAdminMixin, admin.ModelAdmin):
-    list_display = ('room_type', 'room_length', 'room_width', 'room_level')
-    search_fields = ('room_type',)
+    list_display = ('property_display', 'room_type', 'room_length', 'room_width', 'room_level', 'room_dimensions')
+    list_filter = ('room_level', 'room_length_width_units')
+    search_fields = ('room_type', 'room_level', 'room_description', 'property__listing_key', 'property__city')
+    autocomplete_fields = ('property',)
+    list_select_related = ('property',)
+    ordering = ('property', 'room_type')
+
+    @admin.display(description="Property", ordering="property__listing_key")
+    def property_display(self, obj):
+        return f"{obj.property.listing_key} · {obj.property.city or ''}"
 
 class MediaAdmin(SectionedAdminMixin, admin.ModelAdmin):
-    list_display = ('media_url', 'media_category', 'order', 'is_preferred')
-    search_fields = ('media_category',)
+    list_display = ('property_display', 'media_url', 'media_category', 'order', 'is_preferred')
+    list_filter = ('is_preferred', 'media_category')
+    search_fields = ('media_category', 'media_url', 'property__listing_key', 'property__city')
+    autocomplete_fields = ('property',)
+    list_select_related = ('property',)
+    list_editable = ('order', 'is_preferred')
+    ordering = ('property', 'order', 'id')
+
+    @admin.display(description="Property", ordering="property__listing_key")
+    def property_display(self, obj):
+        return f"{obj.property.listing_key} · {obj.property.city or ''}"
 
 class UserFeedbackAdmin(SectionedAdminMixin, admin.ModelAdmin):
-    list_display = ("feedback_type", "status", "email", "created_at")
+    list_display = ("feedback_type", "status", "email", "name", "page_url", "created_at")
     list_filter = ("feedback_type", "status", "created_at")
+    list_editable = ("status",)
     search_fields = ("name", "email", "message", "page_url")
     readonly_fields = ("created_at",)
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
 
 
 @admin.register(PropertyInquiry)
@@ -478,10 +527,14 @@ class PropertyInquiryAdmin(SectionedAdminMixin, admin.ModelAdmin):
         "email",
         "intent",
         "status",
+        "user_display",
+        "project_display",
+        "is_vip_list",
+        "newsletter_opt_in",
         "ghl_synced_at",
         "email_sent_at",
     )
-    list_filter = ("status", "intent", "created_at")
+    list_filter = ("status", "intent", "is_vip_list", "newsletter_opt_in", "created_at", "ghl_synced_at")
     list_editable = ("status",)
     search_fields = (
         "first_name",
@@ -490,7 +543,24 @@ class PropertyInquiryAdmin(SectionedAdminMixin, admin.ModelAdmin):
         "phone",
         "message",
         "preferred_locations",
+        "listing_key",
+        "user__email",
+        "user__first_name",
+        "user__last_name",
+        "project__title",
+        "project__developer",
     )
+    autocomplete_fields = ("project",)
+    list_select_related = ("user", "project")
+    date_hierarchy = "created_at"
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email if obj.user_id else "—"
+
+    @admin.display(description="Project", ordering="project__title")
+    def project_display(self, obj):
+        return obj.project.title if obj.project_id else "—"
     readonly_fields = (
         "created_at",
         "updated_at",
@@ -659,8 +729,12 @@ class ContentAdmin(admin.ModelAdmin):
 @admin.register(ContentMeta)
 class ContentMetaAdmin(admin.ModelAdmin):
     form = ContentMetaAdminForm
-    list_display = ("content", "key", "value")
-    search_fields = ("key", "value")
+    list_display = ("content_display", "key", "value_preview")
+    list_filter = ("key", "content__content_type", "content__status")
+    search_fields = ("key", "value", "content__title", "content__slug", "content__wp_id")
+    autocomplete_fields = ("content",)
+    list_select_related = ("content",)
+    ordering = ("content", "key")
     fieldsets = (
         (
             "Pre-construction project field guide",
@@ -668,13 +742,29 @@ class ContentMetaAdmin(admin.ModelAdmin):
         ),
     )
 
+    @admin.display(description="Content", ordering="content__title")
+    def content_display(self, obj):
+        return f"{obj.content.title} ({obj.content.content_type})"
+
+    @admin.display(description="Value")
+    def value_preview(self, obj):
+        return (obj.value or "")[:120]
+
 
 @admin.register(Attachment)
 class AttachmentAdmin(admin.ModelAdmin):
     form = AttachmentAdminForm
     fields = ("content", "title", "upload", "url", "mime_type")
-    list_display = ("content", "url", "mime_type", "title")
-    search_fields = ("url", "title", "mime_type")
+    list_display = ("content_display", "title", "mime_type", "url")
+    list_filter = ("mime_type", "content__content_type", "content__status")
+    search_fields = ("url", "title", "mime_type", "content__title", "content__slug", "content__wp_id")
+    autocomplete_fields = ("content",)
+    list_select_related = ("content",)
+    ordering = ("content", "id")
+
+    @admin.display(description="Content", ordering="content__title")
+    def content_display(self, obj):
+        return f"{obj.content.title} ({obj.content.content_type})"
 
 
 @admin.register(PreComProperty)
@@ -999,3 +1089,665 @@ class AISearchLogAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return request.method in ("GET", "HEAD")
+
+
+# --------------------------------------------------------------------------
+# Sync / infrastructure
+# --------------------------------------------------------------------------
+
+
+@admin.register(AccessToken)
+class AccessTokenAdmin(admin.ModelAdmin):
+    list_display = ("id", "access_token_expires_at", "refresh_token_expires_at")
+    list_filter = ("access_token_expires_at", "refresh_token_expires_at")
+    readonly_fields = ("access_token", "refresh_token", "access_token_expires_at", "refresh_token_expires_at")
+
+
+@admin.register(ListingSyncStatus)
+class ListingSyncStatusAdmin(admin.ModelAdmin):
+    list_display = ("key", "last_successful_at", "listing_count", "updated_at")
+    list_filter = ("last_successful_at", "updated_at")
+    search_fields = ("key",)
+    readonly_fields = ("updated_at",)
+    ordering = ("-last_successful_at",)
+
+
+@admin.register(MapAggregateCell)
+class MapAggregateCellAdmin(admin.ModelAdmin):
+    list_display = ("h3_index", "resolution", "property_count", "center_lat", "center_lng", "updated_at")
+    list_filter = ("resolution", "updated_at")
+    search_fields = ("h3_index",)
+    readonly_fields = ("updated_at",)
+    ordering = ("resolution", "h3_index")
+
+
+@admin.register(CensusFSA)
+class CensusFSAAdmin(admin.ModelAdmin):
+    list_display = ("fsa", "updated_at")
+    list_filter = ("updated_at",)
+    search_fields = ("fsa",)
+    readonly_fields = ("updated_at",)
+    ordering = ("fsa",)
+
+
+# --------------------------------------------------------------------------
+# Property-related
+# --------------------------------------------------------------------------
+
+
+@admin.register(EstatePropertyImage)
+class EstatePropertyImageAdmin(admin.ModelAdmin):
+    list_display = ("id", "estate_property_display", "caption", "sort_order")
+    list_filter = ("estate_property__city", "estate_property__publish_status")
+    search_fields = (
+        "caption",
+        "estate_property__listing_key",
+        "estate_property__property_title",
+        "estate_property__city",
+    )
+    autocomplete_fields = ("estate_property",)
+    list_select_related = ("estate_property",)
+    ordering = ("sort_order", "id")
+
+    @admin.display(description="Estate property", ordering="estate_property__listing_key")
+    def estate_property_display(self, obj):
+        p = obj.estate_property
+        return f"{p.listing_key} — {p.property_title or p.city or ''}"
+
+
+@admin.register(CommunityListing)
+class CommunityListingAdmin(admin.ModelAdmin):
+    list_display = ("community_name", "community_slug", "property_display", "badge", "rank", "is_published", "updated_at")
+    list_filter = ("is_published", "community_slug", "badge", "created_at")
+    list_editable = ("rank", "is_published")
+    search_fields = (
+        "community_name",
+        "community_slug",
+        "property__listing_key",
+        "property__city",
+        "property__street_name",
+    )
+    autocomplete_fields = ("property",)
+    list_select_related = ("property",)
+    readonly_fields = ("created_at", "updated_at")
+    ordering = ("rank", "-updated_at")
+
+    @admin.display(description="Property", ordering="property__listing_key")
+    def property_display(self, obj):
+        p = obj.property
+        return f"{p.listing_key} · {p.city or ''}"
+
+
+@admin.register(OpenHouse)
+class OpenHouseAdmin(admin.ModelAdmin):
+    list_display = ("open_house_key", "property_display", "date", "start_time", "end_time", "open_house_type", "status")
+    list_filter = ("status", "open_house_type", "date")
+    search_fields = (
+        "open_house_key",
+        "listing_id",
+        "property__listing_key",
+        "property__city",
+        "property__street_name",
+    )
+    autocomplete_fields = ("property",)
+    list_select_related = ("property",)
+    date_hierarchy = "date"
+    ordering = ("-date", "start_time")
+
+    @admin.display(description="Property", ordering="property__listing_key")
+    def property_display(self, obj):
+        p = obj.property
+        return f"{p.listing_key} · {p.city or ''}"
+
+
+@admin.register(PropertySnapshot)
+class PropertySnapshotAdmin(admin.ModelAdmin):
+    list_display = ("listing_key", "list_price", "standard_status", "source_modification_timestamp", "created_at")
+    list_filter = ("standard_status", "created_at", "source_modification_timestamp")
+    search_fields = ("listing_key",)
+    readonly_fields = ("created_at",)
+    ordering = ("-created_at",)
+
+
+@admin.register(ListingFirstSeen)
+class ListingFirstSeenAdmin(admin.ModelAdmin):
+    list_display = ("listing_key", "first_seen_at", "first_source_modification_timestamp")
+    list_filter = ("first_seen_at",)
+    search_fields = ("listing_key",)
+    readonly_fields = ("first_seen_at",)
+    ordering = ("-first_seen_at",)
+
+
+@admin.register(PropertySoldProxy)
+class PropertySoldProxyAdmin(admin.ModelAdmin):
+    list_display = ("listing_key", "last_list_price", "sold_at_proxy", "city", "fsa", "bedrooms_total", "bathrooms_total_integer", "updated_at")
+    list_filter = ("city", "fsa", "property_sub_type", "sold_at_proxy")
+    search_fields = ("listing_key", "city", "unparsed_address", "fsa", "city_region")
+    readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "sold_at_proxy"
+    ordering = ("-sold_at_proxy",)
+
+
+@admin.register(PropertyEmbedding)
+class PropertyEmbeddingAdmin(admin.ModelAdmin):
+    list_display = ("property_display", "model", "dimensions", "updated_at")
+    list_filter = ("model", "dimensions", "updated_at")
+    search_fields = ("property__listing_key", "property__city", "model")
+    autocomplete_fields = ("property",)
+    list_select_related = ("property",)
+    readonly_fields = ("property", "model", "dimensions", "text_hash", "vector", "updated_at")
+    ordering = ("-updated_at",)
+
+    @admin.display(description="Property", ordering="property__listing_key")
+    def property_display(self, obj):
+        p = obj.property
+        return f"{p.listing_key} · {p.city or ''}"
+
+    def has_add_permission(self, request):
+        return False
+
+
+# --------------------------------------------------------------------------
+# User activity / preferences
+# --------------------------------------------------------------------------
+
+
+@admin.register(UserFavorite)
+class UserFavoriteAdmin(admin.ModelAdmin):
+    list_display = ("user_display", "property_key", "created_at")
+    list_filter = ("created_at",)
+    search_fields = ("user__email", "user__first_name", "user__last_name", "property_key")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("created_at",)
+    ordering = ("-created_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return f"{obj.user.email} ({obj.user.full_name})" if obj.user.full_name else obj.user.email
+
+
+@admin.register(UserHistory)
+class UserHistoryAdmin(admin.ModelAdmin):
+    list_display = ("user_display", "property_key", "viewed_at")
+    list_filter = ("viewed_at",)
+    search_fields = ("user__email", "user__first_name", "user__last_name", "property_key")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("viewed_at",)
+    ordering = ("-viewed_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+
+@admin.register(UserToured)
+class UserTouredAdmin(admin.ModelAdmin):
+    list_display = ("user_display", "property_key", "toured_at")
+    list_filter = ("toured_at",)
+    search_fields = ("user__email", "user__first_name", "user__last_name", "property_key")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("toured_at",)
+    ordering = ("-toured_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+
+@admin.register(UserFollowedArea)
+class UserFollowedAreaAdmin(admin.ModelAdmin):
+    list_display = ("user_display", "area_label", "area_key", "area_kind", "created_at")
+    list_filter = ("area_kind", "created_at")
+    search_fields = ("user__email", "user__first_name", "user__last_name", "area_key", "area_label")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("created_at",)
+    ordering = ("-created_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+
+@admin.register(UserAlertPreference)
+class UserAlertPreferenceAdmin(admin.ModelAdmin):
+    list_display = (
+        "user_display",
+        "email_enabled",
+        "price_changes",
+        "new_listings",
+        "status_updates",
+        "email_recommend",
+        "email_watched_property",
+        "email_watched_community",
+        "email_watched_area",
+        "push_watched_property",
+        "updated_at",
+    )
+    list_filter = (
+        "email_enabled",
+        "price_changes",
+        "new_listings",
+        "status_updates",
+        "email_recommend",
+        "push_watched_property",
+    )
+    search_fields = ("user__email", "user__first_name", "user__last_name")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("created_at", "updated_at")
+    ordering = ("-updated_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+
+@admin.register(SavedSearch)
+class SavedSearchAdmin(admin.ModelAdmin):
+    list_display = ("user_display", "name", "alert_cadence", "last_run_at", "last_alert_sent_at", "last_result_count", "updated_at")
+    list_filter = ("alert_cadence", "created_at", "last_alert_sent_at")
+    search_fields = ("user__email", "user__first_name", "user__last_name", "name")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("created_at", "updated_at", "last_run_at", "last_alert_sent_at")
+    ordering = ("-updated_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+
+@admin.register(PropertyNote)
+class PropertyNoteAdmin(admin.ModelAdmin):
+    list_display = ("user_display", "listing_key", "updated_at", "created_at")
+    list_filter = ("updated_at", "created_at")
+    search_fields = ("user__email", "user__first_name", "user__last_name", "listing_key", "body")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("created_at", "updated_at")
+    ordering = ("-updated_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+
+@admin.register(WebPushSubscription)
+class WebPushSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ("user_display", "endpoint_preview", "user_agent", "created_at")
+    list_filter = ("created_at",)
+    search_fields = ("user__email", "user__first_name", "user__last_name", "endpoint", "user_agent")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("endpoint", "p256dh", "auth", "created_at")
+    ordering = ("-created_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+    @admin.display(description="Endpoint")
+    def endpoint_preview(self, obj):
+        return (obj.endpoint or "")[:80]
+
+
+# --------------------------------------------------------------------------
+# Events & logs
+# --------------------------------------------------------------------------
+
+
+@admin.register(ListingViewEvent)
+class ListingViewEventAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "listing_key", "user_display", "session_key", "ip_address")
+    list_filter = ("created_at",)
+    search_fields = ("listing_key", "user__email", "user__first_name", "user__last_name", "session_key", "ip_address")
+    list_select_related = ("user",)
+    readonly_fields = [f.name for f in ListingViewEvent._meta.fields]
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email if obj.user_id else "—"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return request.method in ("GET", "HEAD")
+
+
+@admin.register(UserPropertyInteraction)
+class UserPropertyInteractionAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "event_type", "listing_key", "user_display", "source")
+    list_filter = ("event_type", "source", "created_at")
+    search_fields = ("listing_key", "user__email", "user__first_name", "user__last_name", "session_key")
+    list_select_related = ("user",)
+    readonly_fields = [f.name for f in UserPropertyInteraction._meta.fields]
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email if obj.user_id else "—"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return request.method in ("GET", "HEAD")
+
+
+@admin.register(SearchEvent)
+class SearchEventAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "query", "city", "result_count", "user_display")
+    list_filter = ("city", "created_at")
+    search_fields = ("query", "city", "user__email", "user__first_name", "user__last_name", "session_key")
+    list_select_related = ("user",)
+    readonly_fields = [f.name for f in SearchEvent._meta.fields]
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email if obj.user_id else "—"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return request.method in ("GET", "HEAD")
+
+
+@admin.register(NewsletterDelivery)
+class NewsletterDeliveryAdmin(admin.ModelAdmin):
+    list_display = ("user_display", "digest_date", "status", "listing_count", "sent_at", "created_at")
+    list_filter = ("status", "digest_date", "created_at")
+    search_fields = ("user__email", "user__first_name", "user__last_name")
+    autocomplete_fields = ("user",)
+    list_select_related = ("user",)
+    readonly_fields = ("created_at", "updated_at")
+    date_hierarchy = "digest_date"
+    ordering = ("-digest_date",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+
+@admin.register(PreconActivityEvent)
+class PreconActivityEventAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "project_display", "event", "user_display", "session_key")
+    list_filter = ("event", "created_at")
+    search_fields = (
+        "project__content__title",
+        "project__content__slug",
+        "user__email",
+        "user__first_name",
+        "user__last_name",
+        "session_key",
+    )
+    autocomplete_fields = ("project", "user")
+    list_select_related = ("project__content", "user")
+    readonly_fields = [f.name for f in PreconActivityEvent._meta.fields]
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+
+    @admin.display(description="Project", ordering="project__content__title")
+    def project_display(self, obj):
+        return obj.project.content.title if obj.project_id else "—"
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email if obj.user_id else "—"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return request.method in ("GET", "HEAD")
+
+
+@admin.register(AIAssistLog)
+class AIAssistLogAdmin(admin.ModelAdmin):
+    list_display = (
+        "created_at",
+        "question",
+        "handoff",
+        "fallback",
+        "model",
+        "prompt_tokens",
+        "completion_tokens",
+        "latency_ms",
+        "user_display",
+    )
+    list_filter = ("handoff", "fallback", "model", "created_at")
+    search_fields = ("question", "answer", "user__email", "user__first_name", "user__last_name")
+    list_select_related = ("user",)
+    readonly_fields = [f.name for f in AIAssistLog._meta.fields]
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email if obj.user_id else "—"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return request.method in ("GET", "HEAD")
+
+
+# --------------------------------------------------------------------------
+# Agents
+# --------------------------------------------------------------------------
+
+
+class AgentServiceAreaInline(admin.TabularInline):
+    model = AgentServiceArea
+    extra = 0
+    fields = ("kind", "key")
+
+
+@admin.register(Agent)
+class AgentAdmin(admin.ModelAdmin):
+    inlines = (AgentServiceAreaInline,)
+    list_display = ("name", "email", "phone", "brokerage", "is_active", "created_at", "updated_at")
+    list_filter = ("is_active", "brokerage", "created_at")
+    list_editable = ("is_active",)
+    search_fields = ("name", "email", "phone", "brokerage", "bio")
+    readonly_fields = ("created_at", "updated_at")
+    ordering = ("name",)
+
+
+@admin.register(AgentServiceArea)
+class AgentServiceAreaAdmin(admin.ModelAdmin):
+    list_display = ("agent_display", "kind", "key")
+    list_filter = ("kind",)
+    search_fields = ("agent__name", "agent__email", "key")
+    autocomplete_fields = ("agent",)
+    list_select_related = ("agent",)
+    ordering = ("agent", "kind", "key")
+
+    @admin.display(description="Agent", ordering="agent__name")
+    def agent_display(self, obj):
+        return obj.agent.name
+
+
+# --------------------------------------------------------------------------
+# Estate (pre-con project) ancillaries
+# --------------------------------------------------------------------------
+
+
+@admin.register(EstateContentSection)
+class EstateContentSectionAdmin(admin.ModelAdmin):
+    list_display = ("project_display", "heading", "display_order", "parser_owned")
+    list_filter = ("parser_owned", "project__city", "project__publication_status")
+    search_fields = ("project__title", "project__developer", "heading", "html", "source_key")
+    autocomplete_fields = ("project",)
+    list_select_related = ("project",)
+    ordering = ("project", "display_order", "id")
+
+    @admin.display(description="Project", ordering="project__title")
+    def project_display(self, obj):
+        return obj.project.title
+
+
+@admin.register(EstateUnitType)
+class EstateUnitTypeAdmin(admin.ModelAdmin):
+    list_display = ("project_display", "name", "display_order", "parser_owned")
+    list_filter = ("parser_owned", "project__city", "project__publication_status")
+    search_fields = ("project__title", "project__developer", "name", "description", "source_key")
+    autocomplete_fields = ("project",)
+    list_select_related = ("project",)
+    ordering = ("project", "display_order", "id")
+
+    @admin.display(description="Project", ordering="project__title")
+    def project_display(self, obj):
+        return obj.project.title
+
+
+@admin.register(EstatePrice)
+class EstatePriceAdmin(admin.ModelAdmin):
+    list_display = ("project_display", "unit_type_display", "display_text", "amount", "currency", "display_order")
+    list_filter = ("currency", "project__city", "project__publication_status")
+    search_fields = ("project__title", "project__developer", "display_text", "unit_type__name", "source_key")
+    autocomplete_fields = ("project", "unit_type")
+    list_select_related = ("project", "unit_type")
+    ordering = ("project", "display_order", "id")
+
+    @admin.display(description="Project", ordering="project__title")
+    def project_display(self, obj):
+        return obj.project.title
+
+    @admin.display(description="Unit type", ordering="unit_type__name")
+    def unit_type_display(self, obj):
+        return obj.unit_type.name if obj.unit_type_id else "—"
+
+
+@admin.register(EstateDepositInstallment)
+class EstateDepositInstallmentAdmin(admin.ModelAdmin):
+    list_display = ("plan_display", "milestone", "amount_text", "amount", "percentage", "display_order")
+    list_filter = ("plan__project__city",)
+    search_fields = ("plan__title", "plan__project__title", "milestone", "amount_text", "source_key")
+    autocomplete_fields = ("plan",)
+    list_select_related = ("plan", "plan__project")
+    ordering = ("plan", "display_order", "id")
+
+    @admin.display(description="Deposit plan", ordering="plan__title")
+    def plan_display(self, obj):
+        return f"{obj.plan.project.title} · {obj.plan.title}"
+
+
+@admin.register(EstateIncentive)
+class EstateIncentiveAdmin(admin.ModelAdmin):
+    list_display = ("project_display", "description", "display_order", "parser_owned")
+    list_filter = ("parser_owned", "project__city", "project__publication_status")
+    search_fields = ("project__title", "project__developer", "description", "source_key")
+    autocomplete_fields = ("project",)
+    list_select_related = ("project",)
+    ordering = ("project", "display_order", "id")
+
+    @admin.display(description="Project", ordering="project__title")
+    def project_display(self, obj):
+        return obj.project.title
+
+
+@admin.register(EstateAmenity)
+class EstateAmenityAdmin(admin.ModelAdmin):
+    list_display = ("project_display", "description", "travel_time_minutes", "display_order", "parser_owned")
+    list_filter = ("parser_owned", "project__city", "project__publication_status")
+    search_fields = ("project__title", "project__developer", "description", "source_key")
+    autocomplete_fields = ("project",)
+    list_select_related = ("project",)
+    ordering = ("project", "display_order", "id")
+
+    @admin.display(description="Project", ordering="project__title")
+    def project_display(self, obj):
+        return obj.project.title
+
+
+@admin.register(EstateDocument)
+class EstateDocumentAdmin(admin.ModelAdmin):
+    list_display = ("project_display", "label", "document_type", "requires_phone_verification", "display_order")
+    list_filter = ("document_type", "requires_phone_verification", "project__city", "project__publication_status")
+    search_fields = ("project__title", "project__developer", "label", "source_url", "source_key")
+    autocomplete_fields = ("project",)
+    list_select_related = ("project",)
+    ordering = ("project", "display_order", "id")
+
+    @admin.display(description="Project", ordering="project__title")
+    def project_display(self, obj):
+        return obj.project.title
+
+
+@admin.register(EstateSourceSnapshot)
+class EstateSourceSnapshotAdmin(admin.ModelAdmin):
+    list_display = ("project_display", "parser_version", "source_updated_at", "imported_at")
+    list_filter = ("parser_version", "source_updated_at", "imported_at")
+    search_fields = ("project__title", "project__developer")
+    autocomplete_fields = ("project",)
+    list_select_related = ("project",)
+    readonly_fields = ("imported_at",)
+    ordering = ("-imported_at",)
+
+    @admin.display(description="Project", ordering="project__title")
+    def project_display(self, obj):
+        return obj.project.title
+
+
+@admin.register(EstateDocumentIntent)
+class EstateDocumentIntentAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "document_display", "user_display", "phone", "verified_at")
+    list_filter = ("verified_at", "created_at", "document__document_type")
+    search_fields = (
+        "document__label",
+        "document__project__title",
+        "user__email",
+        "user__first_name",
+        "user__last_name",
+        "phone",
+    )
+    autocomplete_fields = ("document", "user")
+    list_select_related = ("document__project", "user")
+    readonly_fields = ("created_at",)
+    ordering = ("-created_at",)
+
+    @admin.display(description="Document", ordering="document__label")
+    def document_display(self, obj):
+        return f"{obj.document.project.title} · {obj.document.label}"
+
+    @admin.display(description="User", ordering="user__email")
+    def user_display(self, obj):
+        return obj.user.email
+
+
+# --------------------------------------------------------------------------
+# Listing submissions ancillary
+# --------------------------------------------------------------------------
+
+
+@admin.register(ListingSubmissionMedia)
+class ListingSubmissionMediaAdmin(admin.ModelAdmin):
+    list_display = ("submission_display", "media_type", "display_order", "uploaded_at")
+    list_filter = ("media_type", "uploaded_at")
+    search_fields = (
+        "submission__address_line_1",
+        "submission__project_name",
+        "submission__city",
+        "submission__contact_email",
+    )
+    autocomplete_fields = ("submission",)
+    list_select_related = ("submission",)
+    readonly_fields = ("uploaded_at",)
+    ordering = ("submission", "display_order", "id")
+
+    @admin.display(description="Submission", ordering="submission__id")
+    def submission_display(self, obj):
+        s = obj.submission
+        return f"#{s.id} · {s.address_line_1 or s.project_name or 'submission'}"

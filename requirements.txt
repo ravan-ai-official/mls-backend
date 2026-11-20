@@ -20,7 +20,7 @@ cryptography==46.0.5
 pywebpush==2.0.3
 dj-database-url==2.1.0
 Django==5.2.16
-c==1.44.2
+cloudinary==1.44.2
 django-ckeditor==6.7.3
 django-ckeditor-5==0.2.18
 django-cors-headers==4.9.0
