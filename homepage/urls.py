@@ -30,6 +30,7 @@ urlpatterns = [
     path("studio/content/<str:key>/discard/", site_views.StudioSiteDiscardView.as_view(), name="studio-site-discard"),
     path("studio/content/<str:key>/revisions/", site_views.StudioSiteRevisionListView.as_view(), name="studio-site-revisions"),
     path("studio/content/<str:key>/restore/", site_views.StudioSiteRestoreView.as_view(), name="studio-site-restore"),
+    path("studio/media/", site_views.StudioSiteMediaView.as_view(), name="studio-site-media"),
     path("integrations/public/", integration_views.PublicIntegrationsView.as_view(), name="integrations-public"),
     path("studio/integrations/", integration_views.StudioIntegrationsView.as_view(), name="studio-integrations"),
     path("studio/incentives/", studio_editorial.StudioIncentiveListView.as_view(), name="studio-incentives"),

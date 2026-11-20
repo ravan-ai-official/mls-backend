@@ -35,6 +35,7 @@ from .services.query_helpers import (
     STATUS_GROUPS,
     apply_structure_filters,
     _apply_location_filters,
+    _build_search_q,
     cities_match_q,
     city_match_q,
     price_field_for,
@@ -60,10 +61,9 @@ PRICE_BUCKETS: list[tuple[int, int | None]] = [
 def _apply_facet_filters(qs, params) -> Any:
     """Reuse the filter surface of PropertyFilterView so facets match results.
 
-    Only the filters that are meaningful at aggregate time are applied here.
-    Text ``search``/``polygon`` are intentionally left out - they are handled
-    downstream in PropertyFilterView and would make facet counts diverge from
-    the paginated result.
+    Text ``search`` is applied the same way as listings filter so status-tab
+    counts stay aligned with ``?q=…`` result totals. Polygon stays out —
+    geo facets are expensive and rare on the listings strip.
     """
     if params.get("status"):
         qs = qs.filter(standard_status=params.get("status", "").strip())
@@ -71,6 +71,9 @@ def _apply_facet_filters(qs, params) -> Any:
         cities = [c.strip() for c in params.get("city", "").split(",") if c.strip()]
         if cities:
             qs = qs.filter(cities_match_q(cities))
+    search_term = (params.get("search") or "").strip()
+    if search_term:
+        qs = qs.filter(_build_search_q(search_term))
     if params.get("has_lease") in ("true", "1", "True"):
         qs = qs.filter(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
     # Buy / Rent split - the same rules as PropertyFilterView, so each status
@@ -284,6 +287,119 @@ GTA_CITIES: list[str] = [
     "Oshawa",
     "Milton",
 ]
+
+MARKET_CITIES_CACHE_KEY = "market-cities:v1"
+MARKET_CITIES_CACHE_TTL = 60 * 30
+
+
+def _city_base_name(raw: str) -> str:
+    """Strip neighbourhood qualifiers: 'Toronto (Annex)' → 'Toronto'."""
+    value = (raw or "").strip()
+    if " (" in value:
+        value = value.split(" (", 1)[0].strip()
+    return value
+
+
+def _market_cities_from_db(limit: int = 24) -> list[dict[str, Any]]:
+    """Distinct Ontario cities with inventory, collapsed to base names."""
+    rows = (
+        Property.objects.exclude(city__isnull=True)
+        .exclude(city__exact="")
+        .filter(Q(state_or_province__iexact="ON") | Q(state_or_province__istartswith="Ontario"))
+        .values("city")
+        .annotate(
+            listing_count=Count("id"),
+            active_count=Count("id", filter=Q(standard_status__iexact="Active")),
+        )
+        .order_by("-active_count", "-listing_count")[:800]
+    )
+
+    preferred = {name.lower(): name for name in GTA_CITIES}
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        base = _city_base_name(str(row["city"] or ""))
+        if len(base) < 2:
+            continue
+        key = base.lower()
+        # Prefer the canonical GTA spelling when we know it.
+        name = preferred.get(key, base)
+        bucket = buckets.get(key)
+        if bucket is None:
+            buckets[key] = {
+                "name": name,
+                "active_count": int(row["active_count"] or 0),
+                "listing_count": int(row["listing_count"] or 0),
+            }
+        else:
+            bucket["active_count"] += int(row["active_count"] or 0)
+            bucket["listing_count"] += int(row["listing_count"] or 0)
+            if preferred.get(key):
+                bucket["name"] = preferred[key]
+
+    ranked = sorted(
+        buckets.values(),
+        key=lambda item: (-item["active_count"], -item["listing_count"], item["name"].lower()),
+    )
+    # Keep cities that actually have inventory; prefer ones with actives first.
+    usable = [item for item in ranked if item["listing_count"] > 0]
+    return usable[: max(1, min(limit, 40))]
+
+
+class MarketCitiesAPIView(APIView):
+    """GET /api/market/cities/ — cities for the Market Insights dropdown."""
+
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Cities available for market insights",
+        description=(
+            "Returns Ontario cities present in the MLS feed, collapsed from "
+            "neighbourhood-qualified spellings (e.g. 'Toronto (Annex)' → 'Toronto') "
+            "and ordered by active inventory. Powers the Market Insights city filter."
+        ),
+        parameters=[
+            OpenApiParameter(
+                "limit",
+                OpenApiTypes.INT,
+                OpenApiParameter.QUERY,
+                required=False,
+                description="Max cities to return (default 24, max 40).",
+            ),
+        ],
+        responses={
+            200: OpenApiResponse(
+                response=inline_serializer(
+                    name="MarketCitiesResponse",
+                    fields={
+                        "cities": serializers.ListField(child=serializers.DictField()),
+                    },
+                )
+            ),
+        },
+        auth=[],
+    )
+    def get(self, request):
+        try:
+            limit = int(request.query_params.get("limit") or 24)
+        except (TypeError, ValueError):
+            limit = 24
+        limit = max(1, min(limit, 40))
+
+        cache_key = f"{MARKET_CITIES_CACHE_KEY}:{limit}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        cities = _market_cities_from_db(limit)
+        if not cities:
+            # Feed empty / filter too tight — still expose the known GTA set.
+            cities = [
+                {"name": name, "active_count": 0, "listing_count": 0} for name in GTA_CITIES[:limit]
+            ]
+
+        payload = {"cities": cities}
+        cache.set(cache_key, payload, MARKET_CITIES_CACHE_TTL)
+        return Response(payload)
 
 
 def _sold_bucket() -> dict[str, list[float]]:
@@ -1053,8 +1169,71 @@ def get_recent_sales(city: str, days: int) -> list[dict[str, Any]]:
     return rows
 
 
+# Sell-page / UI labels → SOLD_PROPERTY_TYPES keys (plus luxury price band).
+RECENT_SALES_TYPE_ALIASES: dict[str, str] = {
+    "detached": "detached",
+    "semi": "semi",
+    "semi-detached": "semi",
+    "semi_detached": "semi",
+    "townhome": "townhouse",
+    "townhouse": "townhouse",
+    "condo": "condo_apartment",
+    "condo_apartment": "condo_apartment",
+    "condo_townhouse": "condo_townhouse",
+    "luxury": "luxury",
+}
+LUXURY_CLOSE_PRICE_MIN = 1_500_000
+
+
+def _parse_min_int(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    text = str(raw).strip().lower().replace("+", "")
+    if not text:
+        return None
+    try:
+        value = int(float(text))
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def filter_recent_sales(
+    rows: list[dict[str, Any]],
+    *,
+    property_type: str | None = None,
+    beds_min: int | None = None,
+    baths_min: int | None = None,
+) -> list[dict[str, Any]]:
+    """Apply type / beds / baths on top of a city+days recent-sales cache."""
+    type_key = RECENT_SALES_TYPE_ALIASES.get((property_type or "").strip().lower())
+    prefixes = SOLD_PROPERTY_TYPES.get(type_key or "", None) if type_key and type_key != "luxury" else None
+
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        if type_key == "luxury":
+            price = row.get("close_price") or 0
+            if float(price) < LUXURY_CLOSE_PRICE_MIN:
+                continue
+        elif prefixes:
+            sub = (row.get("property_sub_type") or "").strip()
+            if not any(sub.startswith(prefix) for prefix in prefixes):
+                continue
+        if beds_min is not None:
+            beds = row.get("bedrooms")
+            if beds is None or int(beds) < beds_min:
+                continue
+        if baths_min is not None:
+            baths = row.get("bathrooms")
+            if baths is None or int(baths) < baths_min:
+                continue
+        filtered.append(row)
+    return filtered
+
+
 class RecentSalesAPIView(APIView):
-    """GET /api/mls/market/recent-sales/?city=&days=30&page=1 — recently sold homes.
+    """GET /api/mls/market/recent-sales/?city=&days=30&page=1
+    [&property_type=&beds_min=&baths_min=] — recently sold homes.
 
     Signed-in users only. TRREB's VOW rules require a registered, signed-in
     user before sold prices are shown (the same reason HouseSigma gates them),
@@ -1077,6 +1256,9 @@ class RecentSalesAPIView(APIView):
             page = max(1, int(request.query_params.get("page") or 1))
         except ValueError:
             page = 1
+        property_type = (request.query_params.get("property_type") or "").strip()[:40]
+        beds_min = _parse_min_int(request.query_params.get("beds_min") or request.query_params.get("beds"))
+        baths_min = _parse_min_int(request.query_params.get("baths_min") or request.query_params.get("baths"))
         try:
             rows = get_recent_sales(city, days)
         except AmpreClientError as exc:
@@ -1085,6 +1267,12 @@ class RecentSalesAPIView(APIView):
                 {"error": "Sold data is temporarily unavailable."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+        rows = filter_recent_sales(
+            rows,
+            property_type=property_type or None,
+            beds_min=beds_min,
+            baths_min=baths_min,
+        )
         start = (page - 1) * RECENT_SALES_PAGE_SIZE
         return Response(
             {
@@ -1094,6 +1282,9 @@ class RecentSalesAPIView(APIView):
                 "page": page,
                 "page_size": RECENT_SALES_PAGE_SIZE,
                 "truncated": len(rows) >= RECENT_SALES_MAX_ROWS,
+                "property_type": property_type or None,
+                "beds_min": beds_min,
+                "baths_min": baths_min,
                 "results": rows[start:start + RECENT_SALES_PAGE_SIZE],
             }
         )

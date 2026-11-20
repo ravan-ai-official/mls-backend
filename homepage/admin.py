@@ -92,12 +92,3 @@ class MarketSnapshotAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False  # computed by refresh_homepage_feeds
-
-
-from django.apps import apps as _apps  # noqa: E402
-
-for _model in _apps.get_app_config("homepage").get_models():
-    try:
-        admin.site.register(_model)
-    except admin.sites.AlreadyRegistered:
-        pass

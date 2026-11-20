@@ -16,7 +16,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
 from homepage.services.ampre import RESIDENTIAL_CLAUSE, city_clause
-from mls.models import ListingSyncStatus, Property
+from mls.models import Property
 from mls.services.ampre_client import AmpreClientError, fetch_property_page
 from mls.services.ampre_media import (
     is_trreb_property,
@@ -46,8 +46,9 @@ SELECT_FIELDS = [
     "BedroomsAboveGrade",
     "BedroomsBelowGrade",
     "BathroomsTotalInteger",
-    # Removed (AMPRE 400 "property not defined in type 'Property'"):
-    #   LivingArea, LivingAreaMinimum, LivingAreaMaximum
+    "LivingArea",
+    "LivingAreaMinimum",
+    "LivingAreaMaximum",
     "AboveGradeFinishedArea",
     "BuildingAreaTotal",
     "YearBuilt",
@@ -58,7 +59,8 @@ SELECT_FIELDS = [
     "AssociationFeeIncludes",
     "ParkingTotal",
     "ParkingFeatures",
-    # Removed: BuildingFeatures, CommonInterest — not in AMPRE schema.
+    "BuildingFeatures",
+    "CommonInterest",
     "Latitude",
     "Longitude",
     "PublicRemarks",
@@ -119,206 +121,117 @@ class Command(BaseCommand):
         "Sold and De-listed search tabs are populated."
     )
 
-    # Overlap guards against boundary rows and late/skipped runs.
-    INCREMENTAL_OVERLAP_HOURS = 6
-    DEFAULT_BACKFILL_DAYS = 90
-    # Incremental is time-bounded; a 30h GTA window realistically yields a
-    # few hundred rows. Cap is a defensive stop, not a tuning parameter.
-    INCREMENTAL_MAX_ROWS = 10000
-    # Backfill fetches all pages per (city, family) up to the client's
-    # MAX_PAGES_SAFETY (50 pages × 1000/page = 50K). Set to the ceiling so
-    # the client paginates the full result set, not the fetch_property_page
-    # default of 500.
-    BACKFILL_MAX_ROWS = 50000
-
     def add_arguments(self, parser):
         parser.add_argument(
             "--days",
             type=int,
-            default=None,
-            help=(
-                "Explicit look-back window in days. Default: incremental from "
-                "the last successful run (or a 90-day backfill on the first run)."
-            ),
+            default=90,
+            help="Look back this many days (default: 90).",
         )
         parser.add_argument(
             "--max-rows-per-city",
             type=int,
-            default=None,
-            help=(
-                "Max AMPRE rows per city per status family. Default: full "
-                "sync (50K rows / 50 pages per partition via nextLink)."
-            ),
-        )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help=(
-                "Fetch a small sample from 1 partition and validate the "
-                "mapper + Property() instantiation. NO DB writes, NO status "
-                "update, NO media refresh."
-            ),
-        )
-        parser.add_argument(
-            "--sample",
-            type=int,
-            default=5,
-            help="Rows to fetch per partition in --dry-run (default: 5).",
+            default=800,
+            help="Max AMPRE rows per city per status family (default: 800).",
         )
 
     def handle(self, *args, **options):
-        dry_run = options.get("dry_run", False)
-        sample_size = max(1, int(options.get("sample") or 5))
-
-        # Explicit --max-rows-per-city still binds (for throttled re-runs);
-        # default now pulls the full per-(city, family) result set via the
-        # client's MAX_PAGES_SAFETY ceiling.
-        explicit_max_rows = options["max_rows_per_city"] is not None
-        max_rows = (
-            max(50, int(options["max_rows_per_city"]))
-            if explicit_max_rows
-            else self.BACKFILL_MAX_ROWS
-        )
-        last_status = (
-            None if dry_run
-            else ListingSyncStatus.objects.filter(key="ampre_closed").first()
-        )
-        explicit_days = options["days"] is not None
-
-        if explicit_days or not last_status:
-            days = max(1, int(options["days"] or self.DEFAULT_BACKFILL_DAYS))
-            today = timezone.now().date()
-            start = (today - timedelta(days=days)).isoformat()
-            end = (today + timedelta(days=1)).isoformat()
-            self.stdout.write(
-                f"AMPRE backfill: {days}-day window "
-                f"({'explicit --days' if explicit_days else 'no prior sync'}). "
-                f"Per-city cap = {max_rows} rows "
-                f"({'explicit' if explicit_max_rows else 'default full-sync'})."
-            )
-            plan = self._backfill_plan(start=start, end=end, row_cap=max_rows)
-            if dry_run:
-                # Trim to 1 partition (Toronto Closed) and shrink row cap.
-                plan = [p for p in plan if p[1] == "Toronto"][:1]
-                plan = [(p[0], p[1], p[2], p[3], sample_size) for p in plan]
-        else:
-            incremental_since = last_status.last_successful_at - timedelta(
-                hours=self.INCREMENTAL_OVERLAP_HOURS
-            )
-            ts = (
-                incremental_since.replace(microsecond=0)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
-            self.stdout.write(
-                f"AMPRE incremental: ModificationTimestamp >= {ts} "
-                f"(GTA-wide, 2 queries, cap = {self.INCREMENTAL_MAX_ROWS})."
-            )
-            plan = self._incremental_plan(ts=ts)
-            if dry_run:
-                plan = plan[:1]  # Closed only
-                plan = [(p[0], p[1], p[2], p[3], sample_size) for p in plan]
+        days = max(1, int(options["days"]))
+        max_rows = max(50, int(options["max_rows_per_city"]))
+        today = timezone.now().date()
+        start = (today - timedelta(days=days)).isoformat()
+        end = (today + timedelta(days=1)).isoformat()
 
         created = 0
         updated = 0
         fetched = 0
         media_filled = 0
-        cap_hits: list[str] = []
 
-        for label, scope, filter_expression, orderby, row_cap in plan:
-            self.stdout.write(f"{scope} | {label}...")
-            # Fail-fast: AMPRE errors abort the whole sync instead of
-            # silently skipping partitions. A partial first-ever backfill
-            # would advance ListingSyncStatus and permanently lose history.
-            rows = fetch_property_page(
-                filter_expression=filter_expression,
-                select_fields=SELECT_FIELDS,
-                orderby=orderby,
-                top=min(1000, row_cap),
-                max_rows=row_cap,
-            )
+        for city in GTA_CITIES:
+            city_filter = city_clause([city])
 
-            if len(rows) >= row_cap:
-                cap_hits.append(f"{scope}/{label}")
-                self.stderr.write(
-                    self.style.WARNING(
-                        f"  hit row cap ({row_cap}); results may be truncated."
+            queries = [
+                (
+                    "Closed",
+                    f"({city_filter}) and StandardStatus eq 'Closed' "
+                    f"and TransactionType eq 'For Sale' and {RESIDENTIAL_CLAUSE} "
+                    f"and CloseDate ge {start} and CloseDate le {end}",
+                    "CloseDate desc",
+                ),
+                (
+                    "De-listed",
+                    f"({city_filter}) and ("
+                    "StandardStatus eq 'Expired' or StandardStatus eq 'Canceled' "
+                    "or StandardStatus eq 'Cancelled' or StandardStatus eq 'Withdrawn' "
+                    "or StandardStatus eq 'Terminated'"
+                    f") and {RESIDENTIAL_CLAUSE} "
+                    f"and ModificationTimestamp ge {start}T00:00:00Z",
+                    "ModificationTimestamp desc",
+                ),
+            ]
+
+            for label, filter_expression, orderby in queries:
+                self.stdout.write(f"{city} · {label}...")
+                try:
+                    rows = fetch_property_page(
+                        filter_expression=filter_expression,
+                        select_fields=SELECT_FIELDS,
+                        orderby=orderby,
+                        top=min(1000, max_rows),
+                        max_rows=max_rows,
                     )
-                )
-
-            fetched += len(rows)
-            for row in rows:
-                ampre_key = str(row.get("ListingKey") or "").strip()
-                if not ampre_key:
+                except AmpreClientError as exc:
+                    self.stderr.write(self.style.WARNING(f"  skipped: {exc}"))
                     continue
-                defaults = map_ampre_inactive(row)
-                if dry_run:
-                    # Instantiate (no save) to validate mapper kwargs match
-                    # the model — catches crashes like the DDF kitchens/
-                    # garages mismatch without touching the DB.
-                    Property(listing_key=ampre_key, **defaults)
-                    created += 1
-                    continue
-                existing = (
-                    Property.objects.filter(
-                        Q(listing_id=ampre_key) | Q(listing_key=ampre_key)
-                    )
-                    .order_by("id")
-                    .first()
-                )
-                if existing:
-                    for field, value in defaults.items():
-                        if field == "category_type":
-                            continue
-                        setattr(existing, field, value)
-                    existing.save()
-                    updated += 1
-                    prop = existing
-                else:
-                    prop = Property.objects.create(
-                        listing_key=ampre_key, **defaults
-                    )
-                    created += 1
 
-                # Closed sync historically wrote listing rows with no
-                # Media, so Sold / De-listed cards showed the house
-                # placeholder. Pull live AMPRE photos when the gallery
-                # is empty.
-                if (
-                    is_trreb_property(prop)
-                    and not prop.media.exists()
-                ):
-                    try:
-                        written = refresh_property_media_from_ampre(prop)
-                    except AmpreClientError as exc:
-                        self.stderr.write(
-                            self.style.WARNING(
-                                f"  media skip {prop.listing_id or ampre_key}: {exc}"
-                            )
+                fetched += len(rows)
+                for row in rows:
+                    ampre_key = str(row.get("ListingKey") or "").strip()
+                    if not ampre_key:
+                        continue
+                    defaults = map_ampre_inactive(row)
+                    existing = (
+                        Property.objects.filter(
+                            Q(listing_id=ampre_key) | Q(listing_key=ampre_key)
                         )
-                        written = 0
-                    if written:
-                        media_filled += 1
+                        .order_by("id")
+                        .first()
+                    )
+                    if existing:
+                        for field, value in defaults.items():
+                            if field == "category_type":
+                                continue
+                            setattr(existing, field, value)
+                        existing.save()
+                        updated += 1
+                        prop = existing
+                    else:
+                        prop = Property.objects.create(
+                            listing_key=ampre_key, **defaults
+                        )
+                        created += 1
 
-            self.stdout.write(f"  {len(rows):,} rows")
+                    # Closed sync historically wrote listing rows with no
+                    # Media, so Sold / De-listed cards showed the house
+                    # placeholder. Pull live AMPRE photos when the gallery
+                    # is empty.
+                    if (
+                        is_trreb_property(prop)
+                        and not prop.media.exists()
+                    ):
+                        try:
+                            written = refresh_property_media_from_ampre(prop)
+                        except AmpreClientError as exc:
+                            self.stderr.write(
+                                self.style.WARNING(
+                                    f"  media skip {prop.listing_id or ampre_key}: {exc}"
+                                )
+                            )
+                            written = 0
+                        if written:
+                            media_filled += 1
 
-        if dry_run:
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"DRY RUN OK. Fetched {fetched:,} rows, "
-                    f"instantiated {created:,} Property objects (no DB writes, "
-                    f"no status update)."
-                )
-            )
-            return
-
-        ListingSyncStatus.objects.update_or_create(
-            key="ampre_closed",
-            defaults={
-                "last_successful_at": timezone.now(),
-                "listing_count": fetched,
-            },
-        )
+                self.stdout.write(f"  {len(rows):,} rows")
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -326,66 +239,3 @@ class Command(BaseCommand):
                 f"Filled media for {media_filled:,}."
             )
         )
-        if cap_hits:
-            self.stderr.write(
-                self.style.WARNING(
-                    f"Row cap hit in {len(cap_hits)} partition(s): "
-                    f"{', '.join(cap_hits[:10])}"
-                    f"{'...' if len(cap_hits) > 10 else ''}. "
-                    "Data may be incomplete. Raise --max-rows-per-city (backfill) "
-                    "or clear the ampre_closed ListingSyncStatus row to re-backfill."
-                )
-            )
-
-    def _backfill_plan(self, *, start: str, end: str, row_cap: int):
-        """Per-city, per-family queries using CloseDate/ModificationTimestamp
-        windows. One tuple per (city, status family)."""
-        plan = []
-        for city in GTA_CITIES:
-            city_filter = city_clause([city])
-            plan.append((
-                "Closed", city,
-                f"({city_filter}) and StandardStatus eq 'Closed' "
-                f"and TransactionType eq 'For Sale' and {RESIDENTIAL_CLAUSE} "
-                f"and CloseDate ge {start} and CloseDate le {end}",
-                "CloseDate desc",
-                row_cap,
-            ))
-            plan.append((
-                "De-listed", city,
-                f"({city_filter}) and ("
-                "StandardStatus eq 'Expired' or StandardStatus eq 'Canceled' "
-                "or StandardStatus eq 'Cancelled' or StandardStatus eq 'Withdrawn' "
-                "or StandardStatus eq 'Terminated'"
-                f") and {RESIDENTIAL_CLAUSE} "
-                f"and ModificationTimestamp ge {start}T00:00:00Z",
-                "ModificationTimestamp desc",
-                row_cap,
-            ))
-        return plan
-
-    def _incremental_plan(self, *, ts: str):
-        """Two GTA-wide queries (Closed, De-listed) filtered by
-        ModificationTimestamp. 48 per-city requests collapse to 2."""
-        combined_city_filter = city_clause(list(GTA_CITIES))
-        return [
-            (
-                "Closed", "GTA",
-                f"({combined_city_filter}) and StandardStatus eq 'Closed' "
-                f"and TransactionType eq 'For Sale' and {RESIDENTIAL_CLAUSE} "
-                f"and ModificationTimestamp ge {ts}",
-                "ModificationTimestamp desc",
-                self.INCREMENTAL_MAX_ROWS,
-            ),
-            (
-                "De-listed", "GTA",
-                f"({combined_city_filter}) and ("
-                "StandardStatus eq 'Expired' or StandardStatus eq 'Canceled' "
-                "or StandardStatus eq 'Cancelled' or StandardStatus eq 'Withdrawn' "
-                "or StandardStatus eq 'Terminated'"
-                f") and {RESIDENTIAL_CLAUSE} "
-                f"and ModificationTimestamp ge {ts}",
-                "ModificationTimestamp desc",
-                self.INCREMENTAL_MAX_ROWS,
-            ),
-        ]

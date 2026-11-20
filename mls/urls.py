@@ -3,9 +3,11 @@ from django.conf.urls.static import static
 from django.urls import path, include
 from .views import *
 from .views_estate import (
+    EstatePropertyCloudinaryAssetsAPIView,
     EstatePropertyButtonClickAPIView,
     EstatePropertyDetailAPIView,
     EstatePropertyListCreateAPIView,
+    EstatePropertyMediaUploadAPIView,
     EstatePropertySchemaAPIView,
 )
 from .views_ai import AIAssistAPIView, AISearchParseAPIView
@@ -13,9 +15,11 @@ from .views_activity import PreconActivityAPIView, StudioActivityAPIView
 from .views_push import PushSubscribeAPIView, PushVapidAPIView
 from .views_properties import PropertyFilterView
 from .views_schools import SchoolsNearAPIView, SchoolsSearchAPIView, TopSchoolsAPIView
+from .views_climate import ClimateRiskAPIView
 from .views_sitemap import SitemapListingKeysView
 from .views_market import (
     CatalogStatsBulkAPIView,
+    MarketCitiesAPIView,
     MarketSoldTrendsAPIView,
     RecentSalesAPIView,
     PlatformStatsAPIView,
@@ -45,6 +49,7 @@ from .views_search import SearchSuggestAPIView
 from .views_featured_studio import StudioFeaturedAPIView
 from .views_high_return_studio import StudioHighReturnAPIView
 from .views_studio import (
+    StudioPreconAssetUploadAPIView,
     StudioPreconDetailAPIView,
     StudioPreconListCreateAPIView,
     StudioSubmissionDecisionAPIView,
@@ -112,6 +117,7 @@ urlpatterns = [
     path('precon-properties/', PreComPropertyListAPIView.as_view(), name='precon-property-list'),
     # Staff Studio (scope #2d).
     path('studio/precon/', StudioPreconListCreateAPIView.as_view(), name='studio-precon-list'),
+    path('studio/precon/assets/', StudioPreconAssetUploadAPIView.as_view(), name='studio-precon-assets'),
     path('studio/precon/<int:pk>/', StudioPreconDetailAPIView.as_view(), name='studio-precon-detail'),
     path('studio/submissions/', StudioSubmissionListAPIView.as_view(), name='studio-submission-list'),
     path('studio/submissions/<int:pk>/', StudioSubmissionDetailAPIView.as_view(), name='studio-submission-detail'),
@@ -129,10 +135,12 @@ urlpatterns = [
     path('properties/filter/', PropertyFilterView.as_view(), name='property_filter'),
     path('properties/facets/', PropertyFacetsAPIView.as_view(), name='property-facets'),
     path('market/sold-trends/', MarketSoldTrendsAPIView.as_view(), name='market-sold-trends'),
+    path('market/cities/', MarketCitiesAPIView.as_view(), name='market-cities'),
     path('market/recent-sales/', RecentSalesAPIView.as_view(), name='market-recent-sales'),
     path('catalog-stats/bulk/', CatalogStatsBulkAPIView.as_view(), name='catalog-stats-bulk'),
     path('stats/platform/', PlatformStatsAPIView.as_view(), name='stats-platform'),
     path('properties/<str:listing_key>/recommendations/', PropertyRecommendationsAPIView.as_view(), name='property-recommendations'),
+    path('properties/<str:listing_key>/comparables/', PropertyComparablesAPIView.as_view(), name='property-comparables'),
     path('properties/recommendations/track/', RecommendationTrackAPIView.as_view(), name='property-recommendations-track'),
     path('properties/ai-summary/', ListingAISummaryAPIView.as_view(), name='listing-ai-summary'),
     path('properties/lease-properties/', LeasePropertiesAPIView.as_view(), name='lease-properties'),
@@ -142,6 +150,7 @@ urlpatterns = [
     path('schools/near/', SchoolsNearAPIView.as_view(), name='schools-near'),
     path('schools/top/', TopSchoolsAPIView.as_view(), name='schools-top'),
     path('schools/search/', SchoolsSearchAPIView.as_view(), name='schools-search'),
+    path('climate-risk/', ClimateRiskAPIView.as_view(), name='climate-risk'),
     path('nearest-school/', NearestSchoolAPIView.as_view(), name='nearest-school'),
     path('nearby-amenities/', NearbyAmenitiesAPIView.as_view(), name='nearby-amenities'),
     path('listing-sync-status/', ListingSyncStatusAPIView.as_view(), name='listing-sync-status'),
@@ -159,6 +168,8 @@ urlpatterns = [
     ),
     path('properties/<str:PropertyKey>/', PropertyDetailView.as_view(), name='property_detail_path'),
     path('estate-properties/schema/', EstatePropertySchemaAPIView.as_view(), name='estate-property-schema'),
+    path('estate-properties/media-upload/', EstatePropertyMediaUploadAPIView.as_view(), name='estate-property-media-upload'),
+    path('estate-properties/cloudinary-assets/', EstatePropertyCloudinaryAssetsAPIView.as_view(), name='estate-property-cloudinary-assets'),
     path('estate-properties/buttons/click/', EstatePropertyButtonClickAPIView.as_view(), name='estate-property-button-click'),
     path('estate-properties/<int:pk>/', EstatePropertyDetailAPIView.as_view(), name='estate-property-detail'),
     path('estate-properties/', EstatePropertyListCreateAPIView.as_view(), name='estate-property-list'),

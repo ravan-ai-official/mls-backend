@@ -1,4 +1,4 @@
-import time
+﻿import time
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
@@ -156,34 +156,16 @@ class Command(BaseCommand):
             ),
         )
 
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help=(
-                "Fetch 1 page (~100 listings), validate the mapper + "
-                "Property() instantiation. NO DB writes, NO pruning, "
-                "NO chained AMPRE call, NO H3 rebuild, NO status update."
-            ),
-        )
-
     def build_incremental_filter(self):
         """
         Build the DDF filter used for an incremental sync.
 
         The overlap window helps avoid missing records modified close
         to the boundary between two sync runs.
-
-        We anchor on Active rows only — sync_ampre_closed writes rows
-        with category_type=DDF too, so filtering by category alone would
-        anchor DDF's incremental on AMPRE inactive rows' timestamps and
-        skip genuine DDF updates.
         """
         latest_property = (
             Property.objects
-            .filter(
-                category_type=Property.DDF,
-                standard_status="Active",
-            )
+            .filter(category_type=Property.DDF)
             .order_by("-modification_timestamp")
             .first()
         )
@@ -207,9 +189,6 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         start_time = time.time()
-
-        if options.get("dry_run"):
-            return self._dry_run()
 
         if options["full"]:
             raise CommandError(
@@ -248,13 +227,8 @@ class Command(BaseCommand):
             max_storage_mb
         )
 
-        # Active-only check: AMPRE inactive rows share category_type=ddf
-        # but don't count as "DDF cache populated." Without this filter,
-        # 88 AMPRE-sourced inactive rows fool DDF into skipping its first-
-        # ever Active catalogue seed.
         cache_is_empty = not Property.objects.filter(
-            category_type=Property.DDF,
-            standard_status="Active",
+            category_type=Property.DDF
         ).exists()
 
         token = get_access_token()
@@ -299,13 +273,17 @@ class Command(BaseCommand):
             max_pages = options["max_pages"]
 
             if cache_is_empty:
-                # First-ever seed: pull the full catalogue, no 25-page cap.
-                # Only an explicit --max-pages still bounds it (for testing).
+                max_pages = (
+                    max_pages
+                    or self.INITIAL_CACHE_MAX_PAGES
+                )
+
                 filter_expression = None
 
                 self.stdout.write(
-                    "DDF cache is empty; seeding the full catalogue "
-                    f"(cap: {max_pages or 'none'} pages)."
+                    "DDF cache is empty; seeding up to "
+                    f"{max_pages * 100:,} recently "
+                    "modified listings."
                 )
 
             all_properties, page_count = (
@@ -391,11 +369,10 @@ class Command(BaseCommand):
         try:
             from django.core.management import call_command
 
-            # Omit --days and --max-rows-per-city so sync_ampre_closed runs
-            # incrementally (when ListingSyncStatus["ampre_closed"] exists)
-            # or does a complete first-run backfill with no row cap.
             call_command(
                 "sync_ampre_closed",
+                days=90,
+                max_rows_per_city=500,
                 stdout=self.stdout,
                 stderr=self.stderr,
             )
@@ -433,73 +410,6 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"COMPLETED in {elapsed:.1f} "
                 f"seconds ({rate:.1f} props/sec)"
-            )
-        )
-
-    def _dry_run(self):
-        """Fetch 1 page from DDF and run each property through the mapper
-        + Property() instantiation. No DB writes, no chained calls.
-
-        Catches mapper/model mismatches (e.g. the garages/kitchens bug)
-        before any real sync touches prod data.
-        """
-        import requests
-        from django.conf import settings
-        from mls.services.ddf.client import fetch_all_properties
-
-        self.stdout.write(
-            self.style.WARNING("DRY RUN: 1 page (~100 listings), no DB writes.")
-        )
-
-        # Mint a fresh DDF token directly — skip the helpers that save to
-        # DB. This lets dry-run work against a scratch SQLite without the
-        # AccessToken table / Postgres-only migrations.
-        token_response = requests.post(
-            "https://identity.crea.ca/connect/token",
-            data={
-                "grant_type": "client_credentials",
-                "client_id": settings.CLIENT_ID,
-                "client_secret": settings.CLIENT_SECRET,
-                "scope": "DDFApi_Read",
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=30,
-        )
-        token = (
-            token_response.json().get("access_token")
-            if token_response.status_code == 200
-            else None
-        )
-        if not token:
-            self.stderr.write(self.style.ERROR(
-                f"DRY RUN: DDF token request failed "
-                f"(status {token_response.status_code}): "
-                f"{token_response.text[:200]}"
-            ))
-            return
-        headers = {"Authorization": f"Bearer {token}"}
-
-        all_properties, page_count = fetch_all_properties(
-            headers=headers,
-            filter_expression=None,
-            max_pages=1,
-            progress_callback=self.stdout.write,
-        )
-        self.stdout.write(
-            f"DRY RUN: downloaded {len(all_properties):,} listings "
-            f"across {page_count} page(s). Validating mapper + Property()..."
-        )
-
-        validated = 0
-        for data in all_properties:
-            defaults = map_property_defaults(data)
-            Property(**defaults)  # raises TypeError on unknown kwarg
-            validated += 1
-
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"DRY RUN OK. Validated {validated:,} listings. "
-                f"No DB writes, no chained calls."
             )
         )
 
