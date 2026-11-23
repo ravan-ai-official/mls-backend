@@ -38,9 +38,11 @@ from .services.query_helpers import (
     _build_search_q,
     cities_match_q,
     city_match_q,
+    delisted_status_q,
     price_field_for,
     _apply_open_house_filters,
     home_type_q,
+    viewer_can_see_delisted,
 )
 
 
@@ -175,6 +177,7 @@ class PropertyFacetsAPIView(APIView):
         auth=[],
     )
     def get(self, request):
+        allow_delisted = viewer_can_see_delisted(request.user)
         qs = Property.objects.all()
         qs = _apply_facet_filters(qs, request.GET)
         if qs is None:
@@ -182,6 +185,9 @@ class PropertyFacetsAPIView(APIView):
                 {"error": "One of the numeric filters is not an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Public viewers never see delisted inventory in facet counts / tabs.
+        if not allow_delisted:
+            qs = qs.exclude(delisted_status_q())
 
         status_counts = {
             (row["standard_status"] or "Unknown"): row["count"]
@@ -197,6 +203,8 @@ class PropertyFacetsAPIView(APIView):
                 if normalized in statuses:
                     status_group_counts[group] += count
                     break
+        if not allow_delisted:
+            status_group_counts["de-listed"] = 0
         sub_type_counts = {
             (row["property_sub_type"] or "Unknown"): row["count"]
             for row in qs.exclude(property_sub_type__isnull=True)
@@ -1110,6 +1118,45 @@ RESIDENTIAL_SOLD_CLAUSE = (
 )
 
 
+def _to_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _recent_sale_garage_spaces(row: dict[str, Any]) -> int | None:
+    """Prefer GarageSpaces; fall back to ParkingTotal for AMPRE/DDF variance."""
+    for key in ("GarageSpaces", "ParkingTotal"):
+        raw = row.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            return max(0, int(float(raw)))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _recent_sale_lot_frontage(row: dict[str, Any]) -> float | None:
+    """Lot width in feet from FrontageLengthNumeric or LotSizeDimensions."""
+    from mls.services.valuation.lot_dims import parse_lot_frontage_from_dimensions
+
+    frontage = _to_float(row.get("FrontageLengthNumeric"))
+    if frontage is not None and frontage > 0:
+        return frontage
+    parsed = parse_lot_frontage_from_dimensions(row.get("LotSizeDimensions"))
+    if parsed is None:
+        return None
+    try:
+        value = float(parsed)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _recent_sale_row(row: dict[str, Any]) -> dict[str, Any] | None:
     close_price = row.get("ClosePrice")
     close_dt = _parse_ampre_datetime(row.get("CloseDate"))
@@ -1130,6 +1177,8 @@ def _recent_sale_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "property_sub_type": row.get("PropertySubType") or "",
         "bedrooms": row.get("BedroomsTotal"),
         "bathrooms": row.get("BathroomsTotalInteger"),
+        "garage_spaces": _recent_sale_garage_spaces(row),
+        "lot_frontage": _recent_sale_lot_frontage(row),
         "close_price": float(close_price),
         "list_price": float(list_price) if list_price else None,
         "close_date": close_dt.date().isoformat(),
@@ -1138,9 +1187,55 @@ def _recent_sale_row(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# ParkingTotal is already used on live AMPRE sold selects (comps / closed sync).
+# GarageSpaces + lot fields are RESO-standard but not every AMPRE $select list —
+# if OData rejects them we fall back so recent-sales never 502s for a $select miss.
+RECENT_SALES_SELECT_CORE = [
+    "ListingKey", "UnparsedAddress", "City", "PropertySubType",
+    "BedroomsTotal", "BathroomsTotalInteger", "ClosePrice", "CloseDate",
+    "ListPrice", "OriginalListPrice", "OriginalEntryTimestamp",
+    "ParkingTotal",
+]
+RECENT_SALES_SELECT_EXTENDED = [
+    *RECENT_SALES_SELECT_CORE,
+    "GarageSpaces",
+    "FrontageLengthNumeric",
+    "LotSizeDimensions",
+]
+
+
+def _fetch_recent_sales_raw(filter_expression: str) -> list[dict[str, Any]]:
+    """Fetch closed sales; retry without extended $select on AMPRE 400s."""
+    kwargs = dict(
+        filter_expression=filter_expression,
+        orderby="CloseDate desc",
+        top=1000,
+        max_rows=RECENT_SALES_MAX_ROWS,
+    )
+    try:
+        return fetch_property_page(
+            select_fields=RECENT_SALES_SELECT_EXTENDED,
+            **kwargs,
+        )
+    except AmpreClientError as exc:
+        msg = str(exc).lower()
+        # Only retry clear client/select failures — not auth, timeout, or 5xx.
+        if "400" not in msg and "bad request" not in msg and "select" not in msg:
+            raise
+        logger.warning(
+            "recent-sales extended $select rejected; retrying core fields: %s",
+            exc,
+        )
+        return fetch_property_page(
+            select_fields=RECENT_SALES_SELECT_CORE,
+            **kwargs,
+        )
+
+
 def get_recent_sales(city: str, days: int) -> list[dict[str, Any]]:
     """Closed residential sales in ``city`` over ``days``, newest first. Cached 1h."""
-    cache_key = f"recent-sales:v1:{hashlib.md5(city.lower().encode()).hexdigest()}:{days}"
+    # v2 includes garage_spaces / lot_frontage for sell-page filters.
+    cache_key = f"recent-sales:v2:{hashlib.md5(city.lower().encode()).hexdigest()}:{days}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
@@ -1148,21 +1243,11 @@ def get_recent_sales(city: str, days: int) -> list[dict[str, Any]]:
     start = (now - timedelta(days=days)).date().isoformat()
     end = (now + timedelta(days=1)).date().isoformat()
     quoted = city.replace("'", "''")
-    raw = fetch_property_page(
-        filter_expression=(
-            f"startswith(City,'{quoted}') "
-            "and StandardStatus eq 'Closed' and TransactionType eq 'For Sale' "
-            f"and {RESIDENTIAL_SOLD_CLAUSE} "
-            f"and CloseDate ge {start} and CloseDate lt {end}"
-        ),
-        select_fields=[
-            "ListingKey", "UnparsedAddress", "City", "PropertySubType",
-            "BedroomsTotal", "BathroomsTotalInteger", "ClosePrice", "CloseDate",
-            "ListPrice", "OriginalListPrice", "OriginalEntryTimestamp",
-        ],
-        orderby="CloseDate desc",
-        top=1000,
-        max_rows=RECENT_SALES_MAX_ROWS,
+    raw = _fetch_recent_sales_raw(
+        f"startswith(City,'{quoted}') "
+        "and StandardStatus eq 'Closed' and TransactionType eq 'For Sale' "
+        f"and {RESIDENTIAL_SOLD_CLAUSE} "
+        f"and CloseDate ge {start} and CloseDate lt {end}"
     )
     rows = [r for r in (_recent_sale_row(row) for row in raw) if r]
     cache.set(cache_key, rows, RECENT_SALES_CACHE_SECONDS)
@@ -1198,14 +1283,30 @@ def _parse_min_int(raw: str | None) -> int | None:
     return value if value >= 0 else None
 
 
+def _parse_min_float(raw: str | None) -> float | None:
+    if raw is None:
+        return None
+    text = str(raw).strip().lower().replace("+", "")
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
 def filter_recent_sales(
     rows: list[dict[str, Any]],
     *,
     property_type: str | None = None,
     beds_min: int | None = None,
     baths_min: int | None = None,
+    garages_min: int | None = None,
+    garages_max: int | None = None,
+    lot_width_min: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Apply type / beds / baths on top of a city+days recent-sales cache."""
+    """Apply sell-page filters on top of a city+days recent-sales cache."""
     type_key = RECENT_SALES_TYPE_ALIASES.get((property_type or "").strip().lower())
     prefixes = SOLD_PROPERTY_TYPES.get(type_key or "", None) if type_key and type_key != "luxury" else None
 
@@ -1227,13 +1328,26 @@ def filter_recent_sales(
             baths = row.get("bathrooms")
             if baths is None or int(baths) < baths_min:
                 continue
+        garage = row.get("garage_spaces")
+        if garages_min is not None:
+            if garage is None or int(garage) < garages_min:
+                continue
+        if garages_max is not None:
+            # "No garage" on the sell form: treat missing as 0.
+            spaces = 0 if garage is None else int(garage)
+            if spaces > garages_max:
+                continue
+        if lot_width_min is not None:
+            frontage = row.get("lot_frontage")
+            if frontage is None or float(frontage) < lot_width_min:
+                continue
         filtered.append(row)
     return filtered
 
 
 class RecentSalesAPIView(APIView):
     """GET /api/mls/market/recent-sales/?city=&days=30&page=1
-    [&property_type=&beds_min=&baths_min=] — recently sold homes.
+    [&property_type=&beds_min=&baths_min=&garages_min=&garages_max=&lot_width_min=]
 
     Signed-in users only. TRREB's VOW rules require a registered, signed-in
     user before sold prices are shown (the same reason HouseSigma gates them),
@@ -1259,6 +1373,13 @@ class RecentSalesAPIView(APIView):
         property_type = (request.query_params.get("property_type") or "").strip()[:40]
         beds_min = _parse_min_int(request.query_params.get("beds_min") or request.query_params.get("beds"))
         baths_min = _parse_min_int(request.query_params.get("baths_min") or request.query_params.get("baths"))
+        garages_min = _parse_min_int(
+            request.query_params.get("garages_min") or request.query_params.get("garage")
+        )
+        garages_max = _parse_min_int(request.query_params.get("garages_max"))
+        lot_width_min = _parse_min_float(
+            request.query_params.get("lot_width_min") or request.query_params.get("lot_width")
+        )
         try:
             rows = get_recent_sales(city, days)
         except AmpreClientError as exc:
@@ -1272,6 +1393,9 @@ class RecentSalesAPIView(APIView):
             property_type=property_type or None,
             beds_min=beds_min,
             baths_min=baths_min,
+            garages_min=garages_min,
+            garages_max=garages_max,
+            lot_width_min=lot_width_min,
         )
         start = (page - 1) * RECENT_SALES_PAGE_SIZE
         return Response(
@@ -1285,6 +1409,9 @@ class RecentSalesAPIView(APIView):
                 "property_type": property_type or None,
                 "beds_min": beds_min,
                 "baths_min": baths_min,
+                "garages_min": garages_min,
+                "garages_max": garages_max,
+                "lot_width_min": lot_width_min,
                 "results": rows[start:start + RECENT_SALES_PAGE_SIZE],
             }
         )

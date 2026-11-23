@@ -127,6 +127,8 @@ class RecentSalesTests(SimpleTestCase):
         "PropertySubType": "Detached", "BedroomsTotal": 3, "BathroomsTotalInteger": 2,
         "ClosePrice": 1_050_000, "ListPrice": 1_000_000, "CloseDate": "2026-09-20",
         "OriginalEntryTimestamp": "2026-09-01T12:00:00Z",
+        "GarageSpaces": 2, "ParkingTotal": 2,
+        "FrontageLengthNumeric": 40, "LotSizeDimensions": "40 x 120 ft",
     }
 
     def test_row_mapping(self):
@@ -180,6 +182,76 @@ class RecentSalesTests(SimpleTestCase):
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["listing_key"], "D1")
 
+    def test_row_includes_garage_and_lot_frontage(self):
+        row = views_market._recent_sale_row(self.RAW)
+        self.assertEqual(row["garage_spaces"], 2)
+        self.assertEqual(row["lot_frontage"], 40.0)
+
+    def test_garage_falls_back_to_parking_total(self):
+        row = views_market._recent_sale_row({
+            **self.RAW, "GarageSpaces": None, "ParkingTotal": 3, "FrontageLengthNumeric": None,
+            "LotSizeDimensions": "42 x 110",
+        })
+        self.assertEqual(row["garage_spaces"], 3)
+        self.assertEqual(row["lot_frontage"], 42.0)
+
+    def test_extended_select_400_falls_back_to_core(self):
+        from mls.services.ampre_client import AmpreClientError
+
+        calls: list[list[str]] = []
+
+        def fake_fetch(*, select_fields=None, **_kwargs):
+            fields = list(select_fields or [])
+            calls.append(fields)
+            if "GarageSpaces" in fields:
+                raise AmpreClientError("400 Client Error: Bad Request for url: ...")
+            return [{**self.RAW, "GarageSpaces": None, "FrontageLengthNumeric": None, "LotSizeDimensions": None}]
+
+        with mock.patch.object(views_market, "fetch_property_page", side_effect=fake_fetch):
+            rows = views_market.get_recent_sales("Brampton", 30)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("GarageSpaces", calls[0])
+        self.assertNotIn("GarageSpaces", calls[1])
+        self.assertEqual(len(rows), 1)
+        # Core still carries ParkingTotal → garage_spaces populated.
+        self.assertEqual(rows[0]["garage_spaces"], 2)
+        self.assertIsNone(rows[0]["lot_frontage"])
+
+    def test_filters_by_garage_and_lot_width(self):
+        from types import SimpleNamespace
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        rows = [
+            views_market._recent_sale_row({
+                **self.RAW, "ListingKey": "G2", "GarageSpaces": 2, "FrontageLengthNumeric": 45,
+            }),
+            views_market._recent_sale_row({
+                **self.RAW, "ListingKey": "G0", "GarageSpaces": 0, "ParkingTotal": 0,
+                "FrontageLengthNumeric": 30,
+            }),
+            views_market._recent_sale_row({
+                **self.RAW, "ListingKey": "G1", "GarageSpaces": 1, "FrontageLengthNumeric": 50,
+            }),
+        ]
+        request = APIRequestFactory().get(
+            "/x",
+            {"city": "Brampton", "days": "90", "garages_min": "2", "lot_width_min": "40"},
+        )
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+        with mock.patch.object(views_market, "get_recent_sales", return_value=rows):
+            response = views_market.RecentSalesAPIView.as_view()(request)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["listing_key"], "G2")
+
+        none_req = APIRequestFactory().get(
+            "/x",
+            {"city": "Brampton", "days": "90", "garages_max": "0"},
+        )
+        force_authenticate(none_req, user=SimpleNamespace(is_authenticated=True))
+        with mock.patch.object(views_market, "get_recent_sales", return_value=rows):
+            none_resp = views_market.RecentSalesAPIView.as_view()(none_req)
+        self.assertEqual(none_resp.data["count"], 1)
+        self.assertEqual(none_resp.data["results"][0]["listing_key"], "G0")
 
 
 class ClientIpValidationTests(SimpleTestCase):

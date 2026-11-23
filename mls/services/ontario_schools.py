@@ -138,10 +138,12 @@ def top_secondary_schools(
     names: list[str] | None = None,
     schools: list[dict] | None = None,
 ) -> list[dict]:
-    """Secondary schools ranked by EQAO.
+    """Secondary schools ranked by EQAO (highest to lowest).
 
     Admin/CMS ``names`` (when matched in the Ministry file) always lead.
-    Remaining slots prefer ``cities`` when provided, else the wider GTA box.
+    Remaining slots prefer ``cities`` when provided (search history), else the
+    wider GTA box (new visitors). IP city handling belongs in the view layer —
+    pass ``cities=None`` for the GTA-wide homepage rail.
     """
     catalogue = schools if schools is not None else load_schools()
     chosen: list[dict] = []

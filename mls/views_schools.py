@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from mls.services.ontario_schools import SOURCE, schools_near, search_schools, top_secondary_schools
-from mls.services.visitor_place import cities_for_request
+from mls.services.visitor_place import parse_cities_param
 
 
 class SchoolsNearAPIView(APIView):
@@ -35,8 +35,10 @@ class SchoolsNearAPIView(APIView):
 class TopSchoolsAPIView(APIView):
     """GET /api/mls/schools/top/?limit=4&cities=&names=
 
-    Admin/CMS school names (``names``) lead when they match the Ministry file.
-    Remaining slots prefer visitor cities (query or IP-city headers), else GTA.
+    Homepage default is the top 4 GTA secondary schools by EQAO.
+    Explicit ``cities`` / ``city`` (search history) scopes the ranking to those
+    municipalities. IP city alone is ignored so new visitors always see GTA-wide
+    top schools. Admin/CMS ``names`` still lead when they match the Ministry file.
     """
 
     permission_classes = [AllowAny]
@@ -46,8 +48,13 @@ class TopSchoolsAPIView(APIView):
             limit = int(request.query_params.get("limit") or 4)
         except ValueError:
             return Response({"error": "limit must be a number."}, status=400)
-        limit = min(8, max(1, limit))
-        cities = cities_for_request(request)
+        # Homepage uses 4; View all may request up to 100 ranked rows.
+        limit = min(100, max(1, limit))
+        # Search history = frontend-sent cities only (not IP headers).
+        cities = parse_cities_param(
+            request.query_params.get("cities") or request.query_params.get("city")
+        )
+        has_search_history = bool(cities)
         names = [
             part.strip()
             for part in (request.query_params.get("names") or "").replace("|", ",").split(",")
@@ -56,6 +63,7 @@ class TopSchoolsAPIView(APIView):
         return Response({
             **SOURCE,
             "cities": cities,
+            "has_search_history": has_search_history,
             "schools": top_secondary_schools(
                 limit=limit,
                 cities=cities or None,

@@ -407,6 +407,78 @@ class PreComDocumentProxyAPIView(APIView):
         return response
 
 
+PRECON_HISTORY_FILTER_KEYS = frozenset(
+    {
+        "cities",
+        "city",
+        "search",
+        "beds_min",
+        "bedrooms",
+        "baths_min",
+        "bathrooms",
+        "price_min",
+        "price_max",
+    }
+)
+
+
+def _precon_parse_decimal(raw) -> Decimal | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or text in {"null", "undefined"}:
+        return None
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _precon_parse_int(raw) -> int | None:
+    value = _precon_parse_decimal(raw)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _precon_explicit_cities(params) -> list[str]:
+    """Cities from frontend search history only — never IP."""
+    from mls.services.visitor_place import parse_cities_param
+
+    cities = parse_cities_param(params.get("cities") or params.get("city"))
+    if cities:
+        return cities
+    # Free-text search/city that did not canonicalize still counts as a place filter.
+    place = (params.get("city") or params.get("search") or "").strip()
+    if place and place.lower() not in {"null", "undefined"}:
+        return [place]
+    return []
+
+
+def _precon_has_search_history(params) -> bool:
+    for key in PRECON_HISTORY_FILTER_KEYS:
+        raw = params.get(key)
+        if raw is None:
+            continue
+        if str(raw).strip() not in {"", "null", "undefined"}:
+            return True
+    return False
+
+
+def _precon_place_q(cities: list[str]) -> Q:
+    place_q = Q()
+    for city in cities:
+        place_q |= (
+            Q(address__icontains=city)
+            | Q(content__title__icontains=city)
+            | Q(developer_name__icontains=city)
+        )
+    return place_q
+
+
 class PreComPropertyListAPIView(ListAPIView):
     """Paginated list of pre-construction properties.
 
@@ -420,7 +492,11 @@ class PreComPropertyListAPIView(ListAPIView):
       keeps the historical ``-id`` order.
     - ``exclude_stage``: comma-separated ``sales_stage`` values to drop,
       e.g. ``sold_out``.
-    - ``city`` / ``search``: match address, title or developer (case-insensitive).
+    - ``cities`` / ``city`` / ``search``: match address, title or developer
+      (case-insensitive). ``cities`` accepts a CSV. IP city is never implied.
+    - ``beds_min`` / ``bedrooms``, ``baths_min`` / ``bathrooms``,
+      ``price_min`` / ``price_max``: last-search numeric filters for the
+      homepage precon deals rail.
     """
 
     ORDERINGS = {
@@ -471,17 +547,43 @@ class PreComPropertyListAPIView(ListAPIView):
         stages = [s.strip() for s in (params.get("exclude_stage") or "").split(",") if s.strip()]
         if stages:
             qs = qs.exclude(sales_stage__in=stages)
-        place = (params.get("city") or params.get("search") or "").strip()
-        if place:
-            qs = qs.filter(
-                Q(address__icontains=place)
-                | Q(content__title__icontains=place)
-                | Q(developer_name__icontains=place)
-            )
+
+        cities = _precon_explicit_cities(params)
+        if cities:
+            qs = qs.filter(_precon_place_q(cities))
+
+        beds_min = _precon_parse_int(params.get("beds_min") or params.get("bedrooms"))
+        if beds_min is not None:
+            qs = qs.filter(bedrooms__gte=beds_min)
+
+        baths_min = _precon_parse_decimal(params.get("baths_min") or params.get("bathrooms"))
+        if baths_min is not None:
+            qs = qs.filter(bathrooms__gte=baths_min)
+
+        price_min = _precon_parse_decimal(params.get("price_min"))
+        if price_min is not None:
+            qs = qs.filter(price__gte=price_min)
+        price_max = _precon_parse_decimal(params.get("price_max"))
+        if price_max is not None:
+            qs = qs.filter(price__lte=price_max)
+
         ordering = self.ORDERINGS.get((params.get("ordering") or "").strip().lower())
         if ordering:
             qs = qs.order_by(*ordering)
         return qs
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        params = request.query_params
+        cities = _precon_explicit_cities(params)
+        # Echo canonical cities when parse succeeded; otherwise the raw place tokens.
+        from mls.services.visitor_place import parse_cities_param
+
+        echoed = parse_cities_param(params.get("cities") or params.get("city")) or cities
+        if isinstance(response.data, dict):
+            response.data["has_search_history"] = _precon_has_search_history(params)
+            response.data["cities"] = echoed
+        return response
 
 
 class PreComPropertyBulkUploadAPIView(APIView):

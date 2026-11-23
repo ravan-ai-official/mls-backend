@@ -1,4 +1,4 @@
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from mls.services.ontario_schools import (
     eqao_percent,
@@ -6,6 +6,7 @@ from mls.services.ontario_schools import (
     schools_near,
     search_schools,
     top_gta_schools,
+    top_secondary_schools,
 )
 
 
@@ -62,6 +63,29 @@ class OntarioSchoolTests(SimpleTestCase):
         found = top_gta_schools(limit=4, schools=schools)
         self.assertEqual([school["name"] for school in found], ["City High"])
 
+    def test_top_secondary_ranks_high_to_low(self):
+        schools = [
+            _school(id="a", name="Alpha High", level="Secondary", city="Toronto", lat=43.7, lon=-79.4, g9_math=70, osslt=70),
+            _school(id="b", name="Beta High", level="Secondary", city="Toronto", lat=43.71, lon=-79.4, g9_math=95, osslt=95),
+            _school(id="c", name="Gamma High", level="Secondary", city="Toronto", lat=43.72, lon=-79.4, g9_math=80, osslt=80),
+        ]
+        found = top_secondary_schools(limit=3, schools=schools)
+        self.assertEqual(
+            [school["name"] for school in found],
+            ["Beta High", "Gamma High", "Alpha High"],
+        )
+        self.assertEqual([school["eqao_percent"] for school in found], [95, 80, 70])
+
+    def test_top_secondary_city_filter_prefers_searched_city(self):
+        schools = [
+            _school(id="1", name="Oak High", level="Secondary", city="Oakville", lat=43.45, lon=-79.7, g9_math=88, osslt=88),
+            _school(id="2", name="Oak Mid", level="Secondary", city="Oakville", lat=43.46, lon=-79.7, g9_math=70, osslt=70),
+            _school(id="3", name="Toronto Elite", level="Secondary", city="Toronto", lat=43.7, lon=-79.4, g9_math=99, osslt=99),
+        ]
+        found = top_secondary_schools(limit=2, cities=["Oakville"], schools=schools)
+        self.assertEqual([school["name"] for school in found], ["Oak High", "Oak Mid"])
+        self.assertEqual(found[0]["eqao_percent"], 88)
+
     def test_open_data_file_loads(self):
         schools = load_schools()
         self.assertGreater(len(schools), 4000)
@@ -78,3 +102,36 @@ class OntarioSchoolTests(SimpleTestCase):
         ]
         found = search_schools("fraser secondary", limit=5, schools=schools)
         self.assertEqual([school["name"] for school in found], ["John Fraser Secondary School"])
+
+
+class TopSchoolsAPIViewTests(TestCase):
+    URL = "/api/mls/schools/top/"
+
+    def test_no_cities_ignores_ip_and_returns_gta_top(self):
+        response = self.client.get(self.URL, {"limit": 4}, HTTP_CF_IPCITY="Mississauga")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["has_search_history"])
+        self.assertEqual(body["cities"], [])
+        self.assertLessEqual(len(body["schools"]), 4)
+        scores = [row["eqao_percent"] for row in body["schools"] if row.get("eqao_percent") is not None]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_explicit_cities_sets_search_history(self):
+        response = self.client.get(self.URL, {"limit": 4, "cities": "Oakville"})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["has_search_history"])
+        self.assertEqual(body["cities"], ["Oakville"])
+        # City filter may top up from GTA if Oakville is thin; order stays high → low.
+        scores = [row["eqao_percent"] for row in body["schools"] if row.get("eqao_percent") is not None]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_view_all_limit_above_eight_is_accepted(self):
+        response = self.client.get(self.URL, {"limit": 20})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertGreater(len(body["schools"]), 8)
+        self.assertLessEqual(len(body["schools"]), 20)
+        scores = [row["eqao_percent"] for row in body["schools"] if row.get("eqao_percent") is not None]
+        self.assertEqual(scores, sorted(scores, reverse=True))

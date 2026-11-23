@@ -12,8 +12,7 @@ from django.core.cache import cache
 logger = logging.getLogger(__name__)
 
 
-def geocode_address(query: str) -> tuple[Optional[float], Optional[float]]:
-    """Return (lat, lng) for a free-text address, or (None, None) on failure."""
+def _nominatim_search(query: str) -> tuple[Optional[float], Optional[float]]:
     cleaned = " ".join((query or "").split()).strip()
     if len(cleaned) < 5:
         return None, None
@@ -60,3 +59,44 @@ def geocode_address(query: str) -> tuple[Optional[float], Optional[float]]:
 
     cache.set(cache_key, {"lat": lat, "lng": lng}, 60 * 60 * 24)
     return lat, lng
+
+
+def geocode_address(
+    query: str,
+    *,
+    city: str | None = None,
+    postal_code: str | None = None,
+    province: str = "Ontario",
+    country: str = "Canada",
+) -> tuple[Optional[float], Optional[float]]:
+    """Return (lat, lng) for an address, trying postal-aware fallbacks."""
+    primary = " ".join((query or "").split()).strip()
+    city = (city or "").strip()
+    postal = " ".join((postal_code or "").split()).strip().upper()
+    province = (province or "").strip()
+    country = (country or "").strip()
+
+    candidates: list[str] = []
+    if primary:
+        candidates.append(primary)
+    # Street + city + postal is usually more reliable than a long free-text blob.
+    street = primary.split(",")[0].strip() if primary else ""
+    compact = ", ".join(
+        part for part in (street or primary, city, postal, province, country) if part
+    )
+    if compact and compact not in candidates:
+        candidates.append(compact)
+    if street and city:
+        short = ", ".join(part for part in (street, city, province, country) if part)
+        if short not in candidates:
+            candidates.append(short)
+    if postal and city:
+        postal_only = ", ".join(part for part in (postal, city, province, country) if part)
+        if postal_only not in candidates:
+            candidates.append(postal_only)
+
+    for candidate in candidates:
+        lat, lng = _nominatim_search(candidate)
+        if lat is not None and lng is not None:
+            return lat, lng
+    return None, None

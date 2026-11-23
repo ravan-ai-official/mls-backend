@@ -60,6 +60,28 @@ def _float_or_none(v: Any) -> Optional[float]:
         return None
 
 
+def _ensure_property_coordinates(p: Property) -> tuple[Optional[float], Optional[float]]:
+    """Use stored coords, or geocode + persist so valuation can find comps."""
+    lat = float(p.latitude) if p.latitude is not None else None
+    lng = float(p.longitude) if p.longitude is not None else None
+    if lat is not None and lng is not None:
+        return lat, lng
+
+    from mls.services.valuation.geocode import geocode_address
+
+    geo_lat, geo_lng = geocode_address(
+        p.unparsed_address or "",
+        city=p.city or "",
+        postal_code=p.postal_code or "",
+    )
+    if geo_lat is None or geo_lng is None:
+        return None, None
+    Property.objects.filter(pk=p.pk).update(latitude=geo_lat, longitude=geo_lng)
+    p.latitude = geo_lat
+    p.longitude = geo_lng
+    return geo_lat, geo_lng
+
+
 def _property_to_lookup_payload(p: Property) -> Dict[str, Any]:
     depth = infer_lot_depth(
         p.lot_size_dimensions,
@@ -69,14 +91,15 @@ def _property_to_lookup_payload(p: Property) -> Dict[str, Any]:
     depth_alt = parse_lot_depth_from_dimensions(p.lot_size_dimensions)
     if depth is None and depth_alt is not None:
         depth = depth_alt
+    lat, lng = _ensure_property_coordinates(p)
     return {
         "listing_key": p.listing_key,
         "unparsed_address": p.unparsed_address or "",
         "postal_code": p.postal_code or "",
         "city": p.city or "",
         "city_region": p.city_region or "",
-        "latitude": float(p.latitude) if p.latitude is not None else None,
-        "longitude": float(p.longitude) if p.longitude is not None else None,
+        "latitude": lat,
+        "longitude": lng,
         "bedrooms_total": p.bedrooms_total,
         "bedrooms_partial": p.bedrooms_below_grade,
         "bathrooms_total": p.bathrooms_total_integer,
@@ -201,14 +224,12 @@ class ValuationEstimateAPIView(APIView):
         if lat is None or lng is None:
             from mls.services.valuation.geocode import geocode_address
 
-            address_bits = [
-                (prop.unparsed_address if prop else "") or body.get("address") or "",
-                city,
-                "Ontario",
-                "Canada",
-            ]
-            query = ", ".join(part.strip() for part in address_bits if str(part).strip())
-            geo_lat, geo_lng = geocode_address(query)
+            address = (prop.unparsed_address if prop else "") or body.get("address") or ""
+            geo_lat, geo_lng = geocode_address(
+                address,
+                city=city,
+                postal_code=postal,
+            )
             if geo_lat is not None and geo_lng is not None:
                 lat, lng = geo_lat, geo_lng
                 if prop is not None and (prop.latitude is None or prop.longitude is None):
@@ -221,7 +242,8 @@ class ValuationEstimateAPIView(APIView):
             return Response(
                 {
                     "detail": (
-                        "We couldn't locate this address on the map. "
+                        "Latitude/longitude aren't available for this property yet, "
+                        "and we couldn't locate the address on the map. "
                         "Try another nearby listing, or ask an agent for a manual CMA."
                     ),
                     "estimate": {
