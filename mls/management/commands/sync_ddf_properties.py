@@ -30,15 +30,18 @@ from mls.snapshot_utils import (
 
 
 class Command(BaseCommand):
-    help = "Maintain a small, recent DDF listing cache."
+    help = "Sync Active DDF listings (full catalogue or 24h window)."
 
     CACHE_POLICY_KEY = "ddf_cache_v2_initialized"
 
-    # Active listings older than this are pruned. Sold / de-listed rows
-    # use INACTIVE_RETENTION_DAYS so the Sold and De-listed tabs keep data.
-    # Override with env DDF_INACTIVE_RETENTION_DAYS; 0 disables age-based
-    # pruning of Sold / De-listed entirely (they can still be dropped by
-    # the storage-cap prune — raise --max-storage-mb accordingly).
+    # DDF OData filter that restricts the feed to Active listings only.
+    # Applied by default on every code path; opt out with --all-statuses.
+    ACTIVE_STATUS_FILTER = "StandardStatus eq 'Active'"
+
+    # Active listings older than this are pruned on an incremental run.
+    # A `--full` sync skips this age-based prune entirely so the complete
+    # catalogue survives. Sold / de-listed rows use INACTIVE_RETENTION_DAYS
+    # (0 = keep forever). Override with env DDF_INACTIVE_RETENTION_DAYS.
     CACHE_RETENTION_DAYS = 1
     INACTIVE_RETENTION_DAYS = int(
         os.environ.get("DDF_INACTIVE_RETENTION_DAYS", "90")
@@ -148,10 +151,21 @@ class Command(BaseCommand):
         parser.add_argument(
             "--max-storage-mb",
             type=int,
-            default=280,
+            default=0,
             help=(
-                "Maximum total PostgreSQL database size in MB "
-                "(default: 280)."
+                "Maximum total PostgreSQL database size in MB. "
+                "0 (default) disables the storage cap so the full "
+                "DDF catalogue can be synced without pruning."
+            ),
+        )
+
+        parser.add_argument(
+            "--all-statuses",
+            action="store_true",
+            help=(
+                "Do not restrict the DDF fetch to Active listings. "
+                "By default, every sync adds "
+                "StandardStatus eq 'Active' to the DDF $filter."
             ),
         )
 
@@ -173,6 +187,22 @@ class Command(BaseCommand):
                 "tier (default: 100)."
             ),
         )
+
+    def _apply_active_filter(
+        self,
+        filter_expression,
+        active_only,
+    ):
+        """
+        Combine an existing DDF `$filter` expression with the
+        Active-only clause when `active_only` is True.
+        """
+        if not active_only:
+            return filter_expression
+        status_clause = self.ACTIVE_STATUS_FILTER
+        if not filter_expression:
+            return status_clause
+        return f"({filter_expression}) and {status_clause}"
 
     def build_incremental_filter(self):
         """
@@ -237,9 +267,16 @@ class Command(BaseCommand):
                 "--max-pages-per-tier must be at least 1."
             )
 
+        active_only = not options["all_statuses"]
+        # A `--full` sync is meant to land the complete DDF catalogue and
+        # keep it. Running the age-based prune before/after would delete
+        # listings whose ModificationTimestamp is older than retention_days,
+        # which defeats the point of the full sync.
+        skip_prune = options["full"]
+
         self.initialize_small_cache()
 
-        if not options["priority_cache"]:
+        if not options["priority_cache"] and not skip_prune:
             self.expire_ghost_actives(retention_days)
             self.prune_expired_properties(
                 retention_days
@@ -284,6 +321,7 @@ class Command(BaseCommand):
                         "insert_new_only"
                     ],
                     max_storage_mb=max_storage_mb,
+                    active_only=active_only,
                 )
             )
 
@@ -325,6 +363,10 @@ class Command(BaseCommand):
                     f"{max_pages * 100:,} recently "
                     "modified listings."
                 )
+
+            filter_expression = self._apply_active_filter(
+                filter_expression, active_only
+            )
 
             all_properties, page_count = (
                 fetch_all_properties(
@@ -369,7 +411,7 @@ class Command(BaseCommand):
                 max_storage_mb=max_storage_mb,
             )
 
-        if not options["priority_cache"]:
+        if not options["priority_cache"] and not skip_prune:
             self.expire_ghost_actives(retention_days)
             self.prune_expired_properties(
                 retention_days
@@ -460,6 +502,7 @@ class Command(BaseCommand):
         batch_size,
         insert_new_only,
         max_storage_mb,
+        active_only=True,
     ):
         """
         Fetch and commit each priority tier before requesting
@@ -507,11 +550,16 @@ class Command(BaseCommand):
                 "listings)..."
             )
 
+            tier_filter = self._apply_active_filter(
+                filter_expression,
+                active_only,
+            )
+
             properties, tier_pages = (
                 fetch_all_properties(
                     headers=headers,
                     filter_expression=(
-                        filter_expression
+                        tier_filter
                     ),
                     max_pages=tier_page_limit,
                     progress_callback=(
@@ -696,6 +744,11 @@ class Command(BaseCommand):
         Prune oldest DDF cache records until the database is
         below the configured storage limit.
         """
+        if not max_storage_mb or int(max_storage_mb) <= 0:
+            # 0 (or unset) means "no cap" — skip pruning entirely so a
+            # full catalogue sync is not partially deleted.
+            return
+
         if os.environ.get("DDF_DISABLE_PRUNING", "0") == "1":
             self.stdout.write(
                 "DDF_DISABLE_PRUNING=1 — skipping storage-cap prune."
@@ -1419,13 +1472,16 @@ class Command(BaseCommand):
         return result
 
 
-# Normal incremental sync (default — watermark-based):
+# Every path adds StandardStatus eq 'Active' to the DDF $filter by
+# default. Pass --all-statuses to opt out.
+#
+# Normal incremental sync (default — watermark-based, Active-only):
 # python manage.py sync_ddf_properties --batch-size 8000
 #
-# Manual full resync (entire catalogue):
-# python manage.py sync_ddf_properties --full --batch-size 8000 --max-storage-mb 16000
+# Manual full resync (entire Active catalogue, no page / storage cap):
+# python manage.py sync_ddf_properties --full --batch-size 8000
 #
-# Scheduled 24h window (what the Celery task uses):
+# Scheduled 24h window (what the Celery beat task uses):
 # python manage.py sync_ddf_properties --window-hours 24 --batch-size 8000
 #
 # Testing with a page cap:

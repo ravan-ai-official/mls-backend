@@ -24,10 +24,21 @@ def run_saved_search_alerts() -> dict:
 
 @shared_task
 def sync_ddf_listing_cache() -> dict:
-    """Incremental DDF sync + expire ghost Actives. Enable via DDF_SYNC_BEAT_ENABLED=1."""
+    """Daily DDF sync of listings created or updated in the last 24 hours.
+
+    Runs every 24h via DDF_SYNC_BEAT_ENABLED=1. Pulls Active listings
+    whose ModificationTimestamp is within the last 24 hours — new
+    creations and edits both move that timestamp forward, so the same
+    filter covers both. No page/storage caps, no age-based prune.
+    """
     from django.core.management import call_command
 
-    call_command("sync_ddf_properties")
+    call_command(
+        "sync_ddf_properties",
+        window_hours=24,
+        batch_size=8000,
+        max_storage_mb=0,
+    )
     return {"ok": True}
 
 
