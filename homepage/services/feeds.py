@@ -341,6 +341,31 @@ def _sold_below_row(
     }
 
 
+def _is_complete_sold_below_row(row: dict[str, Any]) -> bool:
+    """Drop incomplete rows so the homepage never renders empty/placeholder cards."""
+    try:
+        close_price = float(row.get("close_price") or 0)
+        previous = float(row.get("previous_close_price") or 0)
+        loss = float(row.get("loss_amount") or 0)
+    except (TypeError, ValueError):
+        return False
+    address = (row.get("address") or "").strip()
+    city = (row.get("city") or "").strip()
+    listing_key = (row.get("listing_key") or "").strip()
+    close_date = (row.get("close_date") or "").strip()
+    previous_close_date = (row.get("previous_close_date") or "").strip()
+    return bool(
+        listing_key
+        and address
+        and city
+        and close_date
+        and previous_close_date
+        and close_price > 0
+        and previous > close_price
+        and loss > 0
+    )
+
+
 def _sold_below_from_table(limit: int, cities: list[str] | None) -> tuple[list[dict[str, Any]], str | None]:
     from homepage.models import SoldBelowPurchase
 
@@ -476,9 +501,14 @@ def sold_below_purchase(
 ) -> dict[str, Any]:
     preferred = [c for c in (cities or ([city] if city else [])) if c]
     rows, computed_at = _sold_below_from_table(limit, preferred or None)
+    rows = [row for row in rows if _is_complete_sold_below_row(row)]
     source = "table"
     if len(rows) < limit:
-        local = _sold_below_from_local(limit, preferred or None)
+        local = [
+            row
+            for row in _sold_below_from_local(limit, preferred or None)
+            if _is_complete_sold_below_row(row)
+        ]
         if local:
             seen = {row["listing_key"] for row in rows}
             for row in local:
@@ -492,7 +522,11 @@ def sold_below_purchase(
             computed_at = computed_at or timezone.now().isoformat()
     if len(rows) < max(1, limit // 2):
         try:
-            live = _sold_below_from_ampre(limit, preferred or None)
+            live = [
+                row
+                for row in _sold_below_from_ampre(limit, preferred or None)
+                if _is_complete_sold_below_row(row)
+            ]
         except Exception as exc:  # noqa: BLE001 — feed must degrade, not 500
             logger.warning("Sold-below AMPRE fill failed: %s", exc)
             live = []
@@ -507,10 +541,13 @@ def sold_below_purchase(
                     break
             source = f"{source}+ampre" if rows else "ampre"
             computed_at = computed_at or timezone.now().isoformat()
+    results = [row for row in rows[:limit] if _is_complete_sold_below_row(row)]
     return {
-        "results": rows[:limit],
-        "computed_at": computed_at,
-        "source": source,
+        "results": results,
+        "count": len(results),
+        "empty": len(results) == 0,
+        "computed_at": computed_at if results else None,
+        "source": source if results else "none",
         "cities": preferred,
     }
 

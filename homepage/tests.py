@@ -24,6 +24,7 @@ from homepage.services.rent_estimates import (
     investor_metrics,
     rank_candidates,
 )
+from homepage.services.feeds import _is_complete_sold_below_row
 from homepage.services.sold_below import find_repeat_sale_losses, normalise_address
 
 
@@ -157,6 +158,25 @@ class SoldBelowTests(SimpleTestCase):
             self.sale("c2", "9 Oak Ave 102, Oakville", 600_000, "2026-01-01"),    # other unit
         ]
         self.assertEqual(find_repeat_sale_losses(rows), [])
+
+    def test_complete_sold_below_row_rejects_placeholders(self):
+        valid = {
+            "listing_key": "k1",
+            "address": "12 Elm St",
+            "city": "Oakville",
+            "close_price": 1_250_000,
+            "close_date": "2026-03-01",
+            "previous_close_price": 1_400_000,
+            "previous_close_date": "2024-11-01",
+            "loss_amount": 150_000,
+        }
+        self.assertTrue(_is_complete_sold_below_row(valid))
+        self.assertFalse(_is_complete_sold_below_row({**valid, "address": ""}))
+        self.assertFalse(_is_complete_sold_below_row({**valid, "city": ""}))
+        self.assertFalse(_is_complete_sold_below_row({**valid, "close_price": 0}))
+        self.assertFalse(
+            _is_complete_sold_below_row({**valid, "previous_close_price": 1_000_000, "loss_amount": -1})
+        )
 
 
 class MarketSnapshotTests(SimpleTestCase):

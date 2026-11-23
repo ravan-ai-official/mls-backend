@@ -3,6 +3,23 @@ from decimal import Decimal
 from typing import Optional
 
 
+def parse_lot_frontage_from_dimensions(lot_size_dimensions: Optional[str]) -> Optional[Decimal]:
+    """
+    Parse frontage (width) from strings like '40 x 120 ft', '40x120'.
+    Returns the first numeric dimension when two are found; else the only number.
+    """
+    if not lot_size_dimensions or not str(lot_size_dimensions).strip():
+        return None
+    s = str(lot_size_dimensions).lower().replace("A-", "x")
+    nums = re.findall(r"\d+(?:\.\d+)?", s)
+    if not nums:
+        return None
+    try:
+        return Decimal(nums[0])
+    except Exception:
+        return None
+
+
 def parse_lot_depth_from_dimensions(lot_size_dimensions: Optional[str]) -> Optional[Decimal]:
     """
     Parse depth from strings like '120 x 45 ft', '120x45', '45.5 X 100.2 m'.
@@ -10,7 +27,7 @@ def parse_lot_depth_from_dimensions(lot_size_dimensions: Optional[str]) -> Optio
     """
     if not lot_size_dimensions or not str(lot_size_dimensions).strip():
         return None
-    s = str(lot_size_dimensions).lower().replace("×", "x")
+    s = str(lot_size_dimensions).lower().replace("A-", "x")
     nums = re.findall(r"\d+(?:\.\d+)?", s)
     if len(nums) >= 2:
         try:

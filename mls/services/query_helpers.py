@@ -135,6 +135,45 @@ STATUS_GROUPS: dict[str, set[str]] = {
 }
 
 
+def viewer_can_see_delisted(user) -> bool:
+    """Delisted rows are staff/team-only on public listing surfaces."""
+    return bool(
+        getattr(user, "is_authenticated", False) and getattr(user, "is_staff", False)
+    )
+
+
+def is_delisted_status(value: str | None) -> bool:
+    if not value:
+        return False
+    return value.strip().lower() in STATUS_GROUPS["de-listed"]
+
+
+def delisted_status_q() -> Q:
+    q = Q()
+    for status_value in STATUS_GROUPS["de-listed"]:
+        q |= Q(standard_status__iexact=status_value)
+    return q
+
+
+def _sanitize_status_group_for_viewer(
+    raw_value: str | None, *, allow_delisted: bool
+) -> tuple[str | None, bool]:
+    """Strip ``de-listed`` for public viewers.
+
+    Returns ``(sanitized_csv_or_none, force_empty)``. ``force_empty`` is True when
+    the only requested group was de-listed and the viewer cannot see it.
+    """
+    groups = [item.strip() for item in _split_csv(raw_value or "") if item.strip()]
+    if not groups:
+        return None, False
+    if allow_delisted:
+        return ",".join(groups), False
+    kept = [group for group in groups if group.lower() != "de-listed"]
+    if not kept:
+        return None, True
+    return ",".join(kept), False
+
+
 def _build_status_group_q(raw_value: str | None):
     groups = {item.strip().lower() for item in _split_csv(raw_value or "")}
     if not groups:
@@ -148,6 +187,31 @@ def _build_status_group_q(raw_value: str | None):
         for status_value in statuses:
             q |= Q(standard_status__iexact=status_value)
     return q
+
+
+def _apply_status_filters(qs, params, *, allow_delisted: bool = False):
+    """Apply ``status`` / ``standard_status`` / ``status_group`` with delisted gating."""
+    exact_status = (params.get("status") or params.get("standard_status") or "").strip()
+    if exact_status:
+        if not allow_delisted and is_delisted_status(exact_status):
+            return qs.none()
+        # Preserve prior behavior: ``status`` and ``standard_status`` both exact-match.
+        if params.get("status"):
+            qs = qs.filter(standard_status=params.get("status").strip())
+        if params.get("standard_status"):
+            qs = qs.filter(standard_status=params.get("standard_status"))
+
+    sanitized_group, force_empty = _sanitize_status_group_for_viewer(
+        params.get("status_group"), allow_delisted=allow_delisted
+    )
+    if force_empty:
+        return qs.none()
+    status_group_q = _build_status_group_q(sanitized_group)
+    if status_group_q is not None:
+        qs = qs.filter(status_group_q)
+    elif not exact_status and not allow_delisted:
+        qs = qs.exclude(delisted_status_q())
+    return qs
 
 
 def _build_search_q(search_term: str) -> Q:
@@ -244,6 +308,7 @@ def _apply_common_filters(
     include_location: bool = True,
     relaxed_city: bool = False,
     city_candidates: list[str] | None = None,
+    allow_delisted: bool = False,
 ):
     if include_search and params.get("search"):
         search_term = params.get("search", "").strip()
@@ -333,11 +398,7 @@ def _apply_common_filters(
         days = int(params.get("new_listings_days"))
         cutoff = timezone.now() - timedelta(days=days)
         qs = qs.filter(modification_timestamp__gte=cutoff)
-    if params.get("standard_status"):
-        qs = qs.filter(standard_status=params.get("standard_status"))
-    status_group_q = _build_status_group_q(params.get("status_group"))
-    if status_group_q is not None:
-        qs = qs.filter(status_group_q)
+    qs = _apply_status_filters(qs, params, allow_delisted=allow_delisted)
     if params.get("modified_within_days"):
         days = int(params.get("modified_within_days"))
         qs = qs.filter(modification_timestamp__gte=timezone.now() - timedelta(days=days))
@@ -407,14 +468,21 @@ def _is_falsy(value) -> bool:
     return str(value).strip().lower() in {"0", "false", "no", "off"}
 
 
-def _apply_fallback_pipeline(base_qs, params, order_by: tuple[str, ...]):
+def _apply_fallback_pipeline(
+    base_qs, params, order_by: tuple[str, ...], *, allow_delisted: bool = False
+):
     """Apply listing filters.
 
     Fallback (relaxed city → nearby cities → whole catalogue) is opt-in via
     ``allow_fallback=true``. Default is strict: no matches means an empty page.
     """
     strict = _apply_common_filters(
-        base_qs, params, include_search=True, include_location=True, relaxed_city=False
+        base_qs,
+        params,
+        include_search=True,
+        include_location=True,
+        relaxed_city=False,
+        allow_delisted=allow_delisted,
     )
     strict = strict.order_by(*order_by)
     if strict.exists():
@@ -434,7 +502,12 @@ def _apply_fallback_pipeline(base_qs, params, order_by: tuple[str, ...]):
         }
 
     relaxed = _apply_common_filters(
-        base_qs, params, include_search=True, include_location=True, relaxed_city=True
+        base_qs,
+        params,
+        include_search=True,
+        include_location=True,
+        relaxed_city=True,
+        allow_delisted=allow_delisted,
     )
     relaxed = relaxed.order_by(*order_by)
     if relaxed.exists():
@@ -453,6 +526,7 @@ def _apply_fallback_pipeline(base_qs, params, order_by: tuple[str, ...]):
             include_search=False,
             include_location=False,
             city_candidates=suggestions,
+            allow_delisted=allow_delisted,
         ).order_by(*order_by)
         if nearby.exists():
             return nearby, {
@@ -461,7 +535,11 @@ def _apply_fallback_pipeline(base_qs, params, order_by: tuple[str, ...]):
                 "suggested_locations": suggestions,
             }
 
-    safety = base_qs.order_by(*order_by)
+    # Safety net still respects delisted visibility for public viewers.
+    safety = base_qs
+    if not allow_delisted:
+        safety = safety.exclude(delisted_status_q())
+    safety = safety.order_by(*order_by)
     return safety, {
         "fallback_applied": True,
         "fallback_stage": "safety_net",
@@ -524,13 +602,14 @@ def _has_map_filters(params):
     )
 
 
-def _build_map_aggregate_cache_key(params) -> str:
+def _build_map_aggregate_cache_key(params, *, allow_delisted: bool = False) -> str:
     key_payload = {
         "lat_min": params.get("latitude_min", params.get("lat_min")),
         "lat_max": params.get("latitude_max", params.get("lat_max")),
         "lng_min": params.get("longitude_min", params.get("lng_min")),
         "lng_max": params.get("longitude_max", params.get("lng_max")),
         "zoom": params.get("zoom", ""),
+        "allow_delisted": bool(allow_delisted),
         "filters": {
             key: params.get(key)
             for key in sorted(MAP_FILTER_KEYS)
@@ -549,6 +628,8 @@ def _build_property_filter_cache_key(request) -> str:
     for key in sorted(request.GET.keys()):
         for value in request.GET.getlist(key):
             items.append((key, value))
+    # Staff and public must not share a cache entry when delisted visibility differs.
+    items.append(("allow_delisted", "1" if viewer_can_see_delisted(request.user) else "0"))
     digest = hashlib.md5(
         json.dumps(items, default=str).encode("utf-8")
     ).hexdigest()
@@ -566,7 +647,7 @@ def _build_query_params_cache_key(prefix: str, params) -> str:
     return f"{prefix}:{digest}"
 
 
-def _apply_map_filters_to_queryset(qs, params):
+def _apply_map_filters_to_queryset(qs, params, *, allow_delisted: bool = False):
     if params.get("price_min"):
         qs = qs.filter(list_price__gte=float(params.get("price_min")))
     if params.get("price_max"):
@@ -628,11 +709,7 @@ def _apply_map_filters_to_queryset(qs, params):
             qs = qs.filter(property_attached_yn=True)
         elif attached_value in {"false", "0", "no"}:
             qs = qs.filter(property_attached_yn=False)
-    if params.get("status"):
-        qs = qs.filter(standard_status=params.get("status").strip())
-    status_group_q = _build_status_group_q(params.get("status_group"))
-    if status_group_q is not None:
-        qs = qs.filter(status_group_q)
+    qs = _apply_status_filters(qs, params, allow_delisted=allow_delisted)
     if params.get("has_lease") in ("true", "1", "True"):
         qs = qs.filter(lease_amount__gt=0)
     if params.get("has_photos") in ("true", "1", "True"):

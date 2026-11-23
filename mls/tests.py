@@ -27,7 +27,7 @@ from mls.services.newsletter_notifications import send_daily_listing_newsletters
 from mls.services.valuation.comps import select_comps, haversine_km
 from mls.services.valuation.hedonic import apply_hedonic
 from mls.services.valuation.agents import match_agent
-from mls.services.valuation.lot_dims import parse_lot_depth_from_dimensions, infer_lot_depth
+from mls.services.valuation.lot_dims import parse_lot_depth_from_dimensions, parse_lot_frontage_from_dimensions, infer_lot_depth
 from backend import settings as backend_settings
 
 
@@ -129,7 +129,8 @@ class MapAggregationAndFilterTests(TestCase):
         self.assertEqual(payload["mode"], "aggregates")
         self.assertEqual(payload["meta"]["filters_applied"], True)
         total_count = sum(cell["property_count"] for cell in payload["results"])
-        self.assertEqual(total_count, 3)
+        # Public viewers exclude delisted (p4 Terminated); Active + Sold remain.
+        self.assertEqual(total_count, 2)
 
     def test_property_filter_search_is_not_dropped(self):
         response = self.client.get(
@@ -155,6 +156,7 @@ class MapAggregationAndFilterTests(TestCase):
         self.assertIn(self.p1.listing_key, keys)
 
     def test_property_filter_status_group_supports_multi_select(self):
+        # Public: de-listed is stripped, so sold,de-listed → sold only.
         response = self.client.get(
             "/api/mls/properties/filter/",
             {"status_group": "sold,de-listed", "limit": 30, "offset": 0},
@@ -163,8 +165,52 @@ class MapAggregationAndFilterTests(TestCase):
         payload = response.json()
         keys = {row["listing_key"] for row in payload["results"]}
         self.assertIn(self.p3.listing_key, keys)
+        self.assertNotIn(self.p4.listing_key, keys)
+        self.assertNotIn(self.p1.listing_key, keys)
+
+        staff = get_user_model().objects.create_user(
+            email="delisted-staff@example.com",
+            password="safe-password-123",
+            is_staff=True,
+            is_active=True,
+        )
+        token = str(RefreshToken.for_user(staff).access_token)
+        staff_response = self.client.get(
+            "/api/mls/properties/filter/",
+            {"status_group": "sold,de-listed", "limit": 30, "offset": 0},
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(staff_response.status_code, 200)
+        staff_keys = {row["listing_key"] for row in staff_response.json()["results"]}
+        self.assertIn(self.p3.listing_key, staff_keys)
+        self.assertIn(self.p4.listing_key, staff_keys)
+        self.assertNotIn(self.p1.listing_key, staff_keys)
+
+    def test_property_filter_hides_delisted_from_public(self):
+        public = self.client.get(
+            "/api/mls/properties/filter/",
+            {"status_group": "de-listed", "limit": 30, "offset": 0},
+        )
+        self.assertEqual(public.status_code, 200)
+        self.assertEqual(public.json()["count"], 0)
+
+        staff = get_user_model().objects.create_user(
+            email="delisted-only-staff@example.com",
+            password="safe-password-123",
+            is_staff=True,
+            is_active=True,
+        )
+        token = str(RefreshToken.for_user(staff).access_token)
+        staff_response = self.client.get(
+            "/api/mls/properties/filter/",
+            {"status_group": "de-listed", "limit": 30, "offset": 0},
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(staff_response.status_code, 200)
+        keys = {row["listing_key"] for row in staff_response.json()["results"]}
         self.assertIn(self.p4.listing_key, keys)
         self.assertNotIn(self.p1.listing_key, keys)
+        self.assertNotIn(self.p3.listing_key, keys)
 
     def test_property_filter_modified_within_days(self):
         old_ts = timezone.now() - timedelta(days=40)
@@ -220,6 +266,30 @@ class MapAggregationAndFilterTests(TestCase):
             self.assertEqual(response.status_code, 400)
 
     def test_map_aggregates_respects_status_group_and_has_lease(self):
+        # Public cannot request de-listed map aggregates.
+        public = self.client.get(
+            "/api/mls/properties/map-aggregates/",
+            {
+                "latitude_min": 43.0,
+                "latitude_max": 44.0,
+                "longitude_min": -80.0,
+                "longitude_max": -79.0,
+                "zoom": 10,
+                "status_group": "de-listed",
+                "has_lease": "true",
+            },
+        )
+        self.assertEqual(public.status_code, 200)
+        public_total = sum(cell["property_count"] for cell in public.json()["results"])
+        self.assertEqual(public_total, 0)
+
+        staff = get_user_model().objects.create_user(
+            email="map-delisted-staff@example.com",
+            password="safe-password-123",
+            is_staff=True,
+            is_active=True,
+        )
+        token = str(RefreshToken.for_user(staff).access_token)
         response = self.client.get(
             "/api/mls/properties/map-aggregates/",
             {
@@ -231,6 +301,7 @@ class MapAggregationAndFilterTests(TestCase):
                 "status_group": "de-listed",
                 "has_lease": "true",
             },
+            HTTP_AUTHORIZATION=f"Bearer {token}",
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -273,11 +344,28 @@ class MapAggregationAndFilterTests(TestCase):
         response = self.client.get("/api/mls/properties/facets/")
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        # Public facets always zero out de-listed.
         self.assertEqual(
-            payload["status_group"], {"active": 2, "sold": 1, "de-listed": 1}
+            payload["status_group"], {"active": 2, "sold": 1, "de-listed": 0}
         )
-        # Raw counts are unchanged, junk included, for existing consumers.
+        # Raw counts are unchanged for non-delisted rows; junk included.
         self.assertEqual(payload["status"]["high"], 1)
+        self.assertNotIn("Terminated", payload["status"])
+
+        staff = get_user_model().objects.create_user(
+            email="facets-delisted-staff@example.com",
+            password="safe-password-123",
+            is_staff=True,
+            is_active=True,
+        )
+        token = str(RefreshToken.for_user(staff).access_token)
+        staff_payload = self.client.get(
+            "/api/mls/properties/facets/",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        ).json()
+        self.assertEqual(
+            staff_payload["status_group"], {"active": 2, "sold": 1, "de-listed": 1}
+        )
 
     def test_rent_filters_and_sorts_on_total_actual_rent(self):
         # Most DDF rentals carry the rent in total_actual_rent, not lease_amount.
@@ -296,16 +384,30 @@ class MapAggregationAndFilterTests(TestCase):
         self.assertEqual([r["listing_key"] for r in ordered["results"]], ["rent-3200", "rent-1500"])
 
     def test_facets_split_sale_and_rent(self):
-        # p4 is the only row with a lease_amount.
+        # p4 is the only row with a lease_amount, but it is delisted — hidden from public.
         rent = self.client.get("/api/mls/properties/facets/", {"transaction_type": "rent"}).json()
-        self.assertEqual(rent["status_group"], {"active": 0, "sold": 0, "de-listed": 1})
+        self.assertEqual(rent["status_group"], {"active": 0, "sold": 0, "de-listed": 0})
         sale = self.client.get("/api/mls/properties/facets/", {"transaction_type": "sale"}).json()
         self.assertEqual(sale["status_group"], {"active": 2, "sold": 1, "de-listed": 0})
         # Rent prices filter on the monthly lease, not the list price.
         cheap = self.client.get(
             "/api/mls/properties/facets/", {"transaction_type": "rent", "price_max": 3000}
         ).json()
-        self.assertEqual(cheap["status_group"]["de-listed"], 1)
+        self.assertEqual(cheap["status_group"]["de-listed"], 0)
+
+        staff = get_user_model().objects.create_user(
+            email="facets-rent-staff@example.com",
+            password="safe-password-123",
+            is_staff=True,
+            is_active=True,
+        )
+        token = str(RefreshToken.for_user(staff).access_token)
+        staff_rent = self.client.get(
+            "/api/mls/properties/facets/",
+            {"transaction_type": "rent"},
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        ).json()
+        self.assertEqual(staff_rent["status_group"], {"active": 0, "sold": 0, "de-listed": 1})
 
     def test_facets_status_group_keeps_zero_groups(self):
         response = self.client.get("/api/mls/properties/facets/", {"city": "Mississauga"})
@@ -1131,6 +1233,11 @@ class ValuationServiceTests(TestCase):
     def test_parse_lot_depth_from_dimensions(self):
         self.assertEqual(parse_lot_depth_from_dimensions("120 x 45 ft"), Decimal("45"))
         self.assertIsNone(parse_lot_depth_from_dimensions(""))
+
+    def test_parse_lot_frontage_from_dimensions(self):
+        self.assertEqual(parse_lot_frontage_from_dimensions("40 x 120 ft"), Decimal("40"))
+        self.assertEqual(parse_lot_frontage_from_dimensions("45.5"), Decimal("45.5"))
+        self.assertIsNone(parse_lot_frontage_from_dimensions(""))
 
     def test_infer_lot_depth_fallback_area_over_frontage(self):
         d = infer_lot_depth(None, Decimal("5000"), Decimal("50"))

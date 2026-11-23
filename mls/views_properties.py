@@ -25,6 +25,8 @@ from .services.query_helpers import (
     _apply_open_house_filters,
     _build_property_filter_cache_key,
     home_type_q,
+    is_delisted_status,
+    viewer_can_see_delisted,
 )
 from .views import (
     MAP_VIEW_CACHE_TTL_SECONDS,
@@ -123,6 +125,7 @@ class PropertyFilterView(APIView):
         auth=[],
     )
     def get(self, request):
+        allow_delisted = viewer_can_see_delisted(request.user)
         filter_cache_key = _build_property_filter_cache_key(request)
         cached_payload = cache.get(filter_cache_key)
         if cached_payload is not None:
@@ -132,8 +135,12 @@ class PropertyFilterView(APIView):
         offset = int(request.GET.get("offset", 0))
 
         qs = Property.objects.all()
-        if request.GET.get("status"):
-            qs = qs.filter(standard_status=request.GET.get("status", "").strip())
+        status_value = (request.GET.get("status") or "").strip()
+        if status_value:
+            if is_delisted_status(status_value) and not allow_delisted:
+                qs = qs.none()
+            else:
+                qs = qs.filter(standard_status=status_value)
         if request.GET.get("has_lease") in ("true", "1", "True"):
             qs = qs.filter(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
 
@@ -252,7 +259,9 @@ class PropertyFilterView(APIView):
         # listing_key (unique) breaks ties. Price, beds and size sorts tie
         # constantly, and Postgres may order tied rows differently per query,
         # so offset paging repeated some homes across pages and skipped others.
-        final_qs, fallback_meta = _apply_fallback_pipeline(qs, request.GET, (order_by, "listing_key"))
+        final_qs, fallback_meta = _apply_fallback_pipeline(
+            qs, request.GET, (order_by, "listing_key"), allow_delisted=allow_delisted
+        )
 
         polygon = None
         if request.GET.get("polygon"):

@@ -71,7 +71,18 @@ from .serializers import (
     PublicListingSubmissionSerializer,
 )
 from mls.services.map_aggregates import get_resolution_for_zoom
-from mls.services.query_helpers import city_match_q, cities_match_q, price_field_for
+from mls.services.query_helpers import (
+    HOME_TYPE_Q,
+    apply_structure_filters,
+    city_match_q,
+    cities_match_q,
+    delisted_status_q,
+    home_type_q,
+    price_field_for,
+    _apply_common_filters as _qh_apply_common_filters,
+    _apply_status_filters,
+    viewer_can_see_delisted,
+)
 from mls.services.inquiry_ghl import sync_inquiry_to_ghl
 from mls.services.request_meta import client_ip, user_agent
 from mls.services.inquiry_notifications import send_inquiry_email_to_realtor
@@ -335,6 +346,7 @@ def _apply_common_filters(
     include_location: bool = True,
     relaxed_city: bool = False,
     city_candidates: list[str] | None = None,
+    allow_delisted: bool = False,
 ):
     if include_search and params.get("search"):
         search_term = params.get("search", "").strip()
@@ -420,11 +432,7 @@ def _apply_common_filters(
         days = int(params.get("new_listings_days"))
         cutoff = timezone.now() - timedelta(days=days)
         qs = qs.filter(modification_timestamp__gte=cutoff)
-    if params.get("standard_status"):
-        qs = qs.filter(standard_status=params.get("standard_status"))
-    status_group_q = _build_status_group_q(params.get("status_group"))
-    if status_group_q is not None:
-        qs = qs.filter(status_group_q)
+    qs = _apply_status_filters(qs, params, allow_delisted=allow_delisted)
     if params.get("modified_within_days"):
         days = int(params.get("modified_within_days"))
         qs = qs.filter(modification_timestamp__gte=timezone.now() - timedelta(days=days))
@@ -437,9 +445,18 @@ def _apply_common_filters(
     return qs
 
 
-def _apply_fallback_pipeline(base_qs, params, order_by: tuple[str, ...]):
+def _apply_fallback_pipeline(
+    base_qs, params, order_by: tuple[str, ...], *, allow_delisted: bool = False
+):
     """Apply listing filters. Fallback is opt-in via allow_fallback=true."""
-    strict = _apply_common_filters(base_qs, params, include_search=True, include_location=True, relaxed_city=False)
+    strict = _apply_common_filters(
+        base_qs,
+        params,
+        include_search=True,
+        include_location=True,
+        relaxed_city=False,
+        allow_delisted=allow_delisted,
+    )
     strict = strict.order_by(*order_by)
     if strict.exists():
         return strict, {
@@ -461,7 +478,14 @@ def _apply_fallback_pipeline(base_qs, params, order_by: tuple[str, ...]):
             "suggested_locations": [],
         }
 
-    relaxed = _apply_common_filters(base_qs, params, include_search=True, include_location=True, relaxed_city=True)
+    relaxed = _apply_common_filters(
+        base_qs,
+        params,
+        include_search=True,
+        include_location=True,
+        relaxed_city=True,
+        allow_delisted=allow_delisted,
+    )
     relaxed = relaxed.order_by(*order_by)
     if relaxed.exists():
         return relaxed, {
@@ -479,6 +503,7 @@ def _apply_fallback_pipeline(base_qs, params, order_by: tuple[str, ...]):
             include_search=False,
             include_location=False,
             city_candidates=suggestions,
+            allow_delisted=allow_delisted,
         ).order_by(*order_by)
         if nearby.exists():
             return nearby, {
@@ -487,7 +512,10 @@ def _apply_fallback_pipeline(base_qs, params, order_by: tuple[str, ...]):
                 "suggested_locations": suggestions,
             }
 
-    safety = base_qs.order_by(*order_by)
+    safety = base_qs
+    if not allow_delisted:
+        safety = safety.exclude(delisted_status_q())
+    safety = safety.order_by(*order_by)
     return safety, {
         "fallback_applied": True,
         "fallback_stage": "safety_net",
@@ -521,13 +549,14 @@ def _has_map_filters(params):
     )
 
 
-def _build_map_aggregate_cache_key(params) -> str:
+def _build_map_aggregate_cache_key(params, *, allow_delisted: bool = False) -> str:
     key_payload = {
         "lat_min": params.get("latitude_min", params.get("lat_min")),
         "lat_max": params.get("latitude_max", params.get("lat_max")),
         "lng_min": params.get("longitude_min", params.get("lng_min")),
         "lng_max": params.get("longitude_max", params.get("lng_max")),
         "zoom": params.get("zoom", ""),
+        "allow_delisted": bool(allow_delisted),
         "filters": {
             key: params.get(key)
             for key in sorted(MAP_FILTER_KEYS)
@@ -563,7 +592,7 @@ def _build_query_params_cache_key(prefix: str, params) -> str:
     return f"{prefix}:{digest}"
 
 
-def _apply_map_filters_to_queryset(qs, params):
+def _apply_map_filters_to_queryset(qs, params, *, allow_delisted: bool = False):
     qs, price_field = price_field_for(qs, params)
     if params.get("price_min"):
         qs = qs.filter(**{f"{price_field}__gte": float(params.get("price_min"))})
@@ -622,11 +651,7 @@ def _apply_map_filters_to_queryset(qs, params):
                 common_interest_q |= Q(common_interest__iexact=common_interest)
 
             qs = qs.filter(common_interest_q)
-    if params.get("status"):
-        qs = qs.filter(standard_status=params.get("status").strip())
-    status_group_q = _build_status_group_q(params.get("status_group"))
-    if status_group_q is not None:
-        qs = qs.filter(status_group_q)
+    qs = _apply_status_filters(qs, params, allow_delisted=allow_delisted)
     if params.get("has_lease") in ("true", "1", "True"):
         qs = qs.filter(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
     if params.get("has_photos") in ("true", "1", "True"):
@@ -1639,7 +1664,10 @@ class MapAggregatesAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        cache_key = _build_map_aggregate_cache_key(request.query_params)
+        allow_delisted = viewer_can_see_delisted(request.user)
+        cache_key = _build_map_aggregate_cache_key(
+            request.query_params, allow_delisted=allow_delisted
+        )
         cached_payload = cache.get(cache_key)
         if cached_payload:
             cached_payload["meta"] = {
@@ -1670,7 +1698,9 @@ class MapAggregatesAPIView(APIView):
                 latitude__isnull=False,
                 longitude__isnull=False,
             )
-            filtered_qs = _apply_map_filters_to_queryset(filtered_qs, request.query_params)
+            filtered_qs = _apply_map_filters_to_queryset(
+                filtered_qs, request.query_params, allow_delisted=allow_delisted
+            )
             filtered_qs = filtered_qs.annotate(
                 lat_float=Cast("latitude", FloatField()),
                 lng_float=Cast("longitude", FloatField()),
@@ -2107,26 +2137,185 @@ def _exclusive_ids_qs():
 # Statuses that must never appear in a homepage rail.
 INACTIVE_STATUS_Q = _build_status_group_q("sold,de-listed")
 FEATURED_CACHE_TTL_SECONDS = int(os.environ.get("FEATURED_CACHE_TTL_SECONDS", "300"))
+# Curated no-history fill: newer builds only (calendar year window).
+FEATURED_CURATED_MAX_AGE_YEARS = 5
+FEATURED_CURATED_MIN_SQFT = 2000
+FEATURED_DEFAULT_LIMIT = 12
+FEATURED_HISTORY_PARAM_KEYS = frozenset(
+    {
+        "cities",
+        "city",
+        "price_min",
+        "price_max",
+        "beds_min",
+        "bedrooms",
+        "baths_min",
+        "bathrooms",
+        "postal_code",
+        "home_type",
+        "property_sub_type",
+        "property_type",
+        "structure_type",
+        "basement",
+        "year_built_min",
+        "year_built_max",
+        "parking_min",
+        "garages_min",
+        "sqft_min",
+        "sqft_max",
+        "building_area_min",
+        "building_area_max",
+        "architectural_style",
+        "style",
+        "province",
+        "state_or_province",
+        "common_interest",
+        "transaction_type",
+    }
+)
+
+
+def _exclude_rentals(qs):
+    """Featured rails are sale-only — drop anything with a monthly rent."""
+    return qs.exclude(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
+
+
+def _featured_price_order():
+    return (
+        F("list_price").asc(nulls_last=True),
+        "-original_entry_timestamp",
+        "-modification_timestamp",
+        "listing_key",
+    )
+
+
+def _curated_home_type_q():
+    return HOME_TYPE_Q["detached"] | HOME_TYPE_Q["semi"] | HOME_TYPE_Q["townhouse"]
+
+
+def _curated_default_qs():
+    """No-search-history filler: new 0–5 yr detached/semi/town, 2-storey, 2000+ above grade."""
+    from django.db.models.functions import Coalesce
+
+    min_year = timezone.now().year - FEATURED_CURATED_MAX_AGE_YEARS
+    return (
+        _exclude_rentals(Property.objects.all())
+        .filter(standard_status__iexact="active")
+        .exclude(INACTIVE_STATUS_Q)
+        .filter(_curated_home_type_q())
+        .filter(stories=2)
+        .filter(year_built__gte=min_year)
+        .annotate(
+            above_ground_sqft=Coalesce(
+                "above_grade_finished_area",
+                "living_area",
+                "building_area_total",
+            )
+        )
+        .filter(above_ground_sqft__gt=FEATURED_CURATED_MIN_SQFT)
+    )
+
+
+def _featured_has_search_history(params) -> bool:
+    """True when the frontend sent last-search filters (not IP city alone)."""
+    from .services.visitor_place import parse_cities_param
+
+    if parse_cities_param(params.get("cities") or params.get("city")):
+        return True
+    for key in FEATURED_HISTORY_PARAM_KEYS:
+        if key in {"cities", "city"}:
+            continue
+        raw = params.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, (list, tuple)):
+            if any(str(item).strip() for item in raw):
+                return True
+        elif str(raw).strip() not in {"", "null", "undefined"}:
+            return True
+    # Repeatable home_type
+    if hasattr(params, "getlist"):
+        if any(str(item).strip() for item in params.getlist("home_type")):
+            return True
+    return False
+
+
+def _featured_history_qs(params, *, used_ids: set[int]):
+    """Active sale homes matching frontend last-search filter params."""
+    qs = _exclude_rentals(
+        Property.objects.filter(standard_status__iexact="active").exclude(INACTIVE_STATUS_Q)
+    ).exclude(id__in=used_ids)
+
+    # Map listing-page aliases onto query_helpers params.
+    filter_params = params.copy() if hasattr(params, "copy") else dict(params)
+    if hasattr(filter_params, "copy") and not isinstance(filter_params, dict):
+        filter_params = filter_params.copy()
+    else:
+        filter_params = dict(filter_params)
+
+    if filter_params.get("cities") and not filter_params.get("city"):
+        filter_params["city"] = filter_params.get("cities")
+    if filter_params.get("beds_min") and not filter_params.get("bedrooms"):
+        filter_params["bedrooms"] = filter_params.get("beds_min")
+    if filter_params.get("baths_min") and not filter_params.get("bathrooms"):
+        filter_params["bathrooms"] = filter_params.get("baths_min")
+    if filter_params.get("sqft_min") and not filter_params.get("building_area_min"):
+        filter_params["building_area_min"] = filter_params.get("sqft_min")
+    if filter_params.get("sqft_max") and not filter_params.get("building_area_max"):
+        filter_params["building_area_max"] = filter_params.get("sqft_max")
+    if not filter_params.get("transaction_type"):
+        filter_params["transaction_type"] = "sale"
+
+    qs = _qh_apply_common_filters(
+        qs,
+        filter_params,
+        include_search=False,
+        include_location=True,
+        allow_delisted=False,
+    )
+    home_q = home_type_q(params if hasattr(params, "getlist") else filter_params)
+    if home_q is not None:
+        qs = qs.filter(home_q)
+    qs = apply_structure_filters(qs, filter_params)
+
+    style = (filter_params.get("architectural_style") or filter_params.get("style") or "").strip()
+    if style:
+        qs = qs.filter(architectural_style__icontains=style)
+    return qs
+
+
+def _featured_cache_digest(params, *, has_search_history: bool) -> str:
+    items: list[tuple[str, str]] = [("hist", "1" if has_search_history else "0")]
+    for key in sorted(params.keys()):
+        if key in {"limit", "fill"}:
+            continue
+        for value in params.getlist(key) if hasattr(params, "getlist") else [params.get(key)]:
+            if value in (None, "", "null", "undefined"):
+                continue
+            items.append((key, str(value)))
+    return hashlib.md5(json.dumps(items, default=str).encode("utf-8")).hexdigest()
 
 
 class FeaturedPropertiesAPIView(APIView):
     """
     GET /api/mls/properties/featured-properties/
 
-    Homepage Featured rail: admin pins first, then active listings in the
-    visitor's cities (search history / IP city), then exclusive fill.
-    Sold and de-listed rows are left out.
+    Homepage Featured rail: admin pins first; then either last-search matches
+    (history) or near-visitor + curated defaults; then exclusive fill.
+    Sold, de-listed, and rentals are left out. Default rail size is 12.
     """
 
     @extend_schema(
         summary="List featured properties",
         description=(
-            "Admin-pinned listings first (featured_order, then newest), then active "
-            "listings in cities=, then exclusive listings. Each row carries "
-            "featured_source: pinned | local | exclusive."
+            "Admin-pinned sale listings first, then last-search filter matches "
+            "(history) or IP/local + curated defaults (new 0–5 yr detached/semi/"
+            "town, 2-storey, >2000 above-ground sqft, price low→high), then "
+            "exclusive. Rentals never appear. featured_source: pinned | history | "
+            "local | curated | exclusive."
         ),
         parameters=[
-            OpenApiParameter("limit", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Rail size, 1–24. Defaults to 6."),
+            OpenApiParameter("limit", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Rail size, 1–24. Defaults to 12."),
             OpenApiParameter("fill", OpenApiTypes.BOOL, OpenApiParameter.QUERY, required=False, description="Top up after pins. Defaults to true."),
             OpenApiParameter("cities", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False, description="CSV of preferred cities from search history."),
             OpenApiParameter("city", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False, description="Single preferred city."),
@@ -2149,51 +2338,84 @@ class FeaturedPropertiesAPIView(APIView):
         from .services.visitor_place import cities_for_request
 
         try:
-            limit = max(1, min(int(request.query_params.get("limit", 6)), 24))
+            limit = max(
+                1,
+                min(int(request.query_params.get("limit", FEATURED_DEFAULT_LIMIT)), 24),
+            )
         except (TypeError, ValueError):
             return Response({"error": "limit must be an integer."}, status=400)
         fill = str(request.query_params.get("fill", "true")).lower() not in {"0", "false", "no"}
+        has_search_history = _featured_has_search_history(request.query_params)
+        # Near-visitor cities: explicit history cities, else IP city.
         cities = cities_for_request(request)
-        city_key = ",".join(c.lower() for c in cities) or "-"
-
-        cache_key = f"featured-properties:{limit}:{int(fill)}:{city_key}"
+        cache_key = (
+            f"featured-properties:v2:{limit}:{int(fill)}:"
+            f"{_featured_cache_digest(request.query_params, has_search_history=has_search_history)}"
+        )
         cached_payload = cache.get(cache_key)
         if cached_payload is not None:
             return Response(cached_payload)
 
         now = timezone.now()
-        newest = ("-original_entry_timestamp", "-modification_timestamp")
+        price_order = _featured_price_order()
         pinned = list(
-            Property.objects.filter(is_featured=True)
-            .filter(Q(featured_until__isnull=True) | Q(featured_until__gt=now))
-            .exclude(INACTIVE_STATUS_Q)
-            .order_by(F("featured_order").asc(nulls_last=True), *newest)[:limit]
+            _exclude_rentals(
+                Property.objects.filter(is_featured=True)
+                .filter(standard_status__iexact="active")
+                .filter(Q(featured_until__isnull=True) | Q(featured_until__gt=now))
+                .exclude(INACTIVE_STATUS_Q)
+            )
+            .order_by(F("featured_order").asc(nulls_last=True), *price_order)[:limit]
         )
         rows = [(p, "pinned") for p in pinned]
         used_ids = {p.id for p in pinned}
         local_count = 0
+        history_count = 0
+        curated_count = 0
 
-        if fill and len(rows) < limit and cities:
+        if fill and len(rows) < limit and has_search_history:
+            history = list(
+                _featured_history_qs(request.query_params, used_ids=used_ids)
+                .order_by(*price_order)[: limit - len(rows)]
+            )
+            rows += [(p, "history") for p in history]
+            used_ids.update(p.id for p in history)
+            history_count = len(history)
+        elif fill and len(rows) < limit and cities:
             city_q = Q()
             for city in cities:
                 city_q |= Q(city__istartswith=city)
             local = list(
-                Property.objects.filter(standard_status__iexact="active")
-                .filter(city_q)
-                .exclude(id__in=used_ids)
-                .exclude(INACTIVE_STATUS_Q)
-                .order_by(*newest)[: limit - len(rows)]
+                _exclude_rentals(
+                    Property.objects.filter(standard_status__iexact="active")
+                    .filter(city_q)
+                    .exclude(id__in=used_ids)
+                    .exclude(INACTIVE_STATUS_Q)
+                )
+                .order_by(*price_order)[: limit - len(rows)]
             )
             rows += [(p, "local") for p in local]
             used_ids.update(p.id for p in local)
             local_count = len(local)
 
-        if fill and len(rows) < limit:
-            exclusive = (
-                Property.objects.filter(id__in=_exclusive_ids_qs())
+        if fill and len(rows) < limit and not has_search_history:
+            curated = list(
+                _curated_default_qs()
                 .exclude(id__in=used_ids)
-                .exclude(INACTIVE_STATUS_Q)
-                .order_by(*newest)[: limit - len(rows)]
+                .order_by(*price_order)[: limit - len(rows)]
+            )
+            rows += [(p, "curated") for p in curated]
+            used_ids.update(p.id for p in curated)
+            curated_count = len(curated)
+
+        if fill and len(rows) < limit:
+            exclusive = list(
+                _exclude_rentals(
+                    Property.objects.filter(id__in=_exclusive_ids_qs())
+                    .exclude(id__in=used_ids)
+                    .exclude(INACTIVE_STATUS_Q)
+                )
+                .order_by(*price_order)[: limit - len(rows)]
             )
             rows += [(p, "exclusive") for p in exclusive]
 
@@ -2206,7 +2428,10 @@ class FeaturedPropertiesAPIView(APIView):
             "count": len(results),
             "pinned_count": len(pinned),
             "local_count": local_count,
+            "history_count": history_count,
+            "curated_count": curated_count,
             "cities": cities,
+            "has_search_history": has_search_history,
             "results": results,
         }
         cache.set(cache_key, payload, FEATURED_CACHE_TTL_SECONDS)
