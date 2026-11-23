@@ -257,9 +257,9 @@ class Command(BaseCommand):
 
         max_storage_mb = options["max_storage_mb"]
 
-        if max_storage_mb < 1:
+        if max_storage_mb < 0:
             raise CommandError(
-                "--max-storage-mb must be at least 1."
+                "--max-storage-mb must be >= 0 (0 disables the cap)."
             )
 
         if options["max_pages_per_tier"] < 1:
