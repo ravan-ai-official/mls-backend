@@ -163,9 +163,11 @@ class Command(BaseCommand):
             "--all-statuses",
             action="store_true",
             help=(
-                "Do not restrict the DDF fetch to Active listings. "
-                "By default, every sync adds "
-                "StandardStatus eq 'Active' to the DDF $filter."
+                "Deprecated no-op kept for backward compatibility. "
+                "CREA DDF is Active-only upstream, so no status "
+                "filter is applied to the OData request. Non-Active "
+                "residue is cleaned up by expire_ghost_actives / "
+                "prune_expired_properties after the sync."
             ),
         )
 
@@ -191,18 +193,20 @@ class Command(BaseCommand):
     def _apply_active_filter(
         self,
         filter_expression,
-        active_only,
+        active_only,  # noqa: ARG002 — kept for callsite compatibility
     ):
         """
-        Combine an existing DDF `$filter` expression with the
-        Active-only clause when `active_only` is True.
+        No-op passthrough.
+
+        CREA DDF is an Active-only feed at the upstream level, so there is
+        no need to add StandardStatus / ContractStatus to the `$filter`.
+        An earlier version tried `StandardStatus eq 'Active'` but DDF
+        rejects it with HTTP 400 because that field is not filterable in
+        OData. Non-Active residue (listings that transitioned to Expired
+        between syncs) is cleaned up by expire_ghost_actives /
+        prune_expired_properties.
         """
-        if not active_only:
-            return filter_expression
-        status_clause = self.ACTIVE_STATUS_FILTER
-        if not filter_expression:
-            return status_clause
-        return f"({filter_expression}) and {status_clause}"
+        return filter_expression
 
     def build_incremental_filter(self):
         """
