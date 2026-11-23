@@ -18,9 +18,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip wheel --wheel-dir /wheels \
+# BuildKit cache mount keeps pip's HTTP cache across build attempts so
+# a mid-stream broken-pipe only costs the one wheel, not the whole run.
+# pip >= 24.3 is required for --resume-retries (resumes partial downloads
+# on mid-stream connection drops, which the slim image's older pip lacks).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade "pip>=24.3" && \
+    pip wheel --wheel-dir /wheels \
         --default-timeout=600 \
         --retries=10 \
+        --resume-retries=10 \
         -r requirements.txt
 
 

@@ -1476,10 +1476,11 @@ class Command(BaseCommand):
         return result
 
 
-# Every path adds StandardStatus eq 'Active' to the DDF $filter by
-# default. Pass --all-statuses to opt out.
+# CREA DDF is Active-only at the source, so no OData $filter on
+# StandardStatus is sent (DDF rejects it anyway). Non-Active residue is
+# removed by expire_ghost_actives / prune_expired_properties.
 #
-# Normal incremental sync (default — watermark-based, Active-only):
+# Normal incremental sync (default — watermark-based):
 # python manage.py sync_ddf_properties --batch-size 8000
 #
 # Manual full resync (entire Active catalogue, no page / storage cap):
