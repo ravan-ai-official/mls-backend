@@ -165,6 +165,24 @@ class Command(BaseCommand):
             ),
         )
 
+        parser.add_argument(
+            "--repair-media",
+            action="store_true",
+            help=(
+                "After upsert, probe dead DDF CDN URLs and refresh "
+                "from AMPRE. Off by default — expensive on full sync."
+            ),
+        )
+
+        parser.add_argument(
+            "--skip-ampre",
+            action="store_true",
+            help=(
+                "Do not chain sync_ampre_closed after the DDF pull. "
+                "Use when running AMPRE separately."
+            ),
+        )
+
     def build_incremental_filter(self):
         """
         Build the DDF filter used for an incremental sync.
@@ -285,38 +303,61 @@ class Command(BaseCommand):
                     "DDF cache is empty; seeding the full catalogue."
                 )
 
-            # STREAMING UPSERT.
-            # Each page is committed to the DB before the next one is
-            # requested. Peak memory stays constant (~5 MB) regardless of
-            # catalogue size, rows land in near real time, and committed
-            # work survives interruption.
+            # STREAMING UPSERT with real DB batching.
+            # DDF pages are 100 rows; accumulate into --batch-size before
+            # writing so bulk_create / bulk_update amortize round-trips.
+            # Peak memory ≈ batch_size listings; committed work survives
+            # interruption between batches.
             connections.close_all()
             downloaded_count = 0
             page_count = 0
+            batch_size = max(100, int(options["batch_size"]))
+            buffer: list = []
             pages_iter = iter_property_pages(
                 headers=headers,
                 filter_expression=filter_expression,
                 max_pages=max_pages,
                 progress_callback=self.stdout.write,
             )
-            for page in pages_iter:
-                page_count += 1
-                if not page:
-                    continue
+
+            def flush_buffer():
+                nonlocal downloaded_count, buffer
+                if not buffer:
+                    return
+                chunk = buffer
+                buffer = []
                 try:
                     self.process_batch(
-                        page,
+                        chunk,
                         insert_new_only=options["insert_new_only"],
+                        repair_media=options["repair_media"],
+                    )
+                    downloaded_count += len(chunk)
+                    self.stdout.write(
+                        f"Committed batch of {len(chunk):,} "
+                        f"(total {downloaded_count:,})."
                     )
                 except Exception as exc:
                     self.stderr.write(
                         self.style.WARNING(
-                            f"Page {page_count:,} upsert failed: {exc}. "
-                            "Continuing with next page."
+                            f"Batch upsert failed ({len(chunk):,} rows): "
+                            f"{exc}. Continuing."
                         )
                     )
+
+            for page in pages_iter:
+                page_count += 1
+                if not page:
                     continue
-                downloaded_count += len(page)
+                buffer.extend(page)
+                while len(buffer) >= batch_size:
+                    # Keep remainder in buffer; flush exact batch_size.
+                    overflow = buffer[batch_size:]
+                    buffer = buffer[:batch_size]
+                    flush_buffer()
+                    buffer = overflow
+
+            flush_buffer()
 
             self.stdout.write(
                 f"Streamed {page_count:,} pages "
@@ -357,22 +398,33 @@ class Command(BaseCommand):
             )
 
         # DDF is Active-only; Sold / De-listed tabs need AMPRE inactive rows.
-        try:
-            from django.core.management import call_command
+        # Mirror the DDF mode: full → AMPRE full, window → same window,
+        # otherwise a 24h incremental (new + updated only).
+        if not options["skip_ampre"]:
+            try:
+                from django.core.management import call_command
 
-            call_command(
-                "sync_ampre_closed",
-                days=90,
-                max_rows_per_city=500,
-                stdout=self.stdout,
-                stderr=self.stderr,
-            )
-        except Exception as exc:
-            self.stderr.write(
-                self.style.WARNING(
-                    f"AMPRE Closed/De-listed sync skipped: {exc}"
+                ampre_kwargs = {
+                    "stdout": self.stdout,
+                    "stderr": self.stderr,
+                    "skip_media": True,
+                }
+                if options["full"]:
+                    ampre_kwargs["full"] = True
+                elif options["window_hours"]:
+                    ampre_kwargs["window_hours"] = options["window_hours"]
+                    ampre_kwargs["max_rows_per_city"] = 5000
+                else:
+                    ampre_kwargs["window_hours"] = 24
+                    ampre_kwargs["max_rows_per_city"] = 5000
+
+                call_command("sync_ampre_closed", **ampre_kwargs)
+            except Exception as exc:
+                self.stderr.write(
+                    self.style.WARNING(
+                        f"AMPRE Closed/De-listed sync skipped: {exc}"
+                    )
                 )
-            )
 
         ListingSyncStatus.objects.update_or_create(
             key="ddf_properties",
@@ -518,6 +570,7 @@ class Command(BaseCommand):
                 insert_new_only=(
                     insert_new_only
                 ),
+                repair_media=False,
             )
 
             self.stdout.write(
@@ -545,6 +598,7 @@ class Command(BaseCommand):
         properties_data,
         batch_size=5000,
         insert_new_only=False,
+        repair_media=False,
     ):
         """
         Persist DDF records in independent batches.
@@ -575,6 +629,7 @@ class Command(BaseCommand):
                 insert_new_only=(
                     insert_new_only
                 ),
+                repair_media=repair_media,
             )
 
             self.stdout.write(
@@ -588,7 +643,9 @@ class Command(BaseCommand):
         self,
         batch,
         insert_new_only=False,
+        repair_media=False,
     ):
+        """Upsert one batch. NEVER deletes Property rows."""
         listing_keys = [
             data["ListingKey"]
             for data in batch
@@ -614,6 +671,8 @@ class Command(BaseCommand):
         # Store child payloads by listing key rather than constructing
         # Room/Media rows immediately. This ensures new Property rows
         # have database IDs before their children are created.
+        # Only listings that are actually written get Room/Media refresh
+        # (unchanged ModificationTimestamp skips the expensive delete+insert).
         rooms_by_listing_key = {}
         media_by_listing_key = {}
 
@@ -672,6 +731,17 @@ class Command(BaseCommand):
                         "modification_timestamp"
                     )
                 )
+
+                # Fast path: upstream has not moved — leave the row alone.
+                if (
+                    old_modification_timestamp is not None
+                    and new_modification_timestamp is not None
+                    and old_modification_timestamp
+                    == new_modification_timestamp
+                    and old_status == new_status
+                    and old_price == new_price
+                ):
+                    continue
 
                 # Track list-price cuts so the UI Price Drop badge and
                 # HouseSigma-style history stay honest after sync.
@@ -943,11 +1013,10 @@ class Command(BaseCommand):
                     ignore_conflicts=True,
                 )
 
-            # DDF CDN URLs for TRREB listings often 404 while AMPRE still
-            # hosts the same photos. Rebuild gallery rows from AMPRE when
-            # the preferred DDF URL is already dead so sync does not leave
-            # (or re-introduce) blank house-icon galleries.
-            if affected_properties:
+            # Optional: DDF CDN URLs for TRREB listings often 404 while
+            # AMPRE still hosts the same photos. Off by default — probing
+            # every URL makes full sync dramatically slower.
+            if repair_media and affected_properties:
                 from mls.services.ampre_media import repair_dead_ddf_media
 
                 repaired = repair_dead_ddf_media(
@@ -994,14 +1063,14 @@ class Command(BaseCommand):
 
 # Append-only DDF sync — no Property rows are ever deleted by this file.
 #
+# Full catalogue sync (then enable daily beat for 24h incremental):
+#   python manage.py sync_ddf_properties --full --batch-size 10000
+#
+# Scheduled 24h window — new + updated only (Celery beat):
+#   python manage.py sync_ddf_properties --window-hours 24 --batch-size 10000
+#
 # Incremental sync (watermark-based):
-#   python manage.py sync_ddf_properties --batch-size 8000
-#
-# Full catalogue sync:
-#   python manage.py sync_ddf_properties --full --batch-size 8000
-#
-# Scheduled 24h window (what the Celery beat task uses):
-#   python manage.py sync_ddf_properties --window-hours 24 --batch-size 8000
+#   python manage.py sync_ddf_properties --batch-size 10000
 #
 # Testing with a page cap:
 #   python manage.py sync_ddf_properties --max-pages 1 --batch-size 500

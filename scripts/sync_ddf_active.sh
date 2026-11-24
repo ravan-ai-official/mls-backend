@@ -88,7 +88,7 @@ for arg in "$@"; do
     case "$arg" in
         --priority) PRIORITY=true ;;
         --cleanup)
-            fail "--cleanup was removed — this script is now append-only. See sync_ddf_properties.py NEVER_DELETE policy."
+            fail "--cleanup was removed — sync never deletes Property rows (append-only)."
             exit 1
             ;;
         -h|--help)  usage ;;
@@ -155,7 +155,7 @@ while true; do
 
     # Any new milestone line we haven't echoed yet?
     NEW_LINE=$(docker logs --tail=50 "$CONTAINER_NAME" 2>&1 \
-        | grep -E "Downloading|Downloaded [0-9]|Starting bulk upsert|Committed|Marked [0-9]+ stale|Deleted [0-9]+|Pruning|enforce|tier:" \
+        | grep -E "Downloading|Downloaded [0-9]|Starting bulk upsert|Committed|Streamed|AMPRE sync|COMPLETED|tier:" \
         | tail -1 || true)
     if [ -n "$NEW_LINE" ] && [ "$NEW_LINE" != "$LAST_LINE" ]; then
         printf '  %s[%3dm%02ds]%s %s\n' "$C_DIM" "$((ELAPSED/60))" "$((ELAPSED%60))" "$C_RST" "$NEW_LINE" \

@@ -18,7 +18,9 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 30
-MAX_PAGES_SAFETY = 50
+# Raised so --full AMPRE sync can pull large per-city Closed histories
+# (1000 rows/page × 100 pages = 100k rows/query family).
+MAX_PAGES_SAFETY = 100
 
 # "$" stays literal so the OData system options read as $filter/$top/$select.
 _SAFE_KEY_CHARS = "$"

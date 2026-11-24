@@ -37,14 +37,26 @@ def sync_ddf_listing_cache() -> dict:
         "sync_ddf_properties",
         window_hours=24,
         batch_size=10000,
+        # AMPRE has its own beat task (sync_ampre_inactive_listings).
+        skip_ampre=True,
     )
     return {"ok": True}
 
 
 @shared_task
 def sync_ampre_inactive_listings() -> dict:
-    """Pull Terminated/Expired/Closed from AMPRE. Enable via AMPRE_CLOSED_BEAT_ENABLED=1."""
+    """Daily AMPRE sync of Closed/De-listed created or updated in the last 24h.
+
+    Enable via AMPRE_CLOSED_BEAT_ENABLED=1. Uses ModificationTimestamp so
+    both new sales and status edits are covered. Append-only — never
+    deletes Property rows.
+    """
     from django.core.management import call_command
 
-    call_command("sync_ampre_closed")
+    call_command(
+        "sync_ampre_closed",
+        window_hours=24,
+        max_rows_per_city=5000,
+        skip_media=True,
+    )
     return {"ok": True}

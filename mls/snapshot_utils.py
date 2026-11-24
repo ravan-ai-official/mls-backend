@@ -2,8 +2,22 @@
 
 import logging
 from collections.abc import Iterable
+from datetime import datetime
+
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _aware_utc(value):
+    """Coerce snapshot timestamps to timezone-aware UTC (or None)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if timezone.is_naive(value):
+            return timezone.make_aware(value, timezone.utc)
+        return value.astimezone(timezone.utc)
+    return value
 
 
 def record_property_snapshot(property_instance) -> None:
@@ -24,7 +38,7 @@ def record_property_snapshot(property_instance) -> None:
         )
         lp = property_instance.list_price
         st = (property_instance.standard_status or "").strip()
-        mt = property_instance.modification_timestamp
+        mt = _aware_utc(property_instance.modification_timestamp)
         if last:
             same_price = last.list_price == lp
             same_status = (last.standard_status or "") == st
@@ -78,7 +92,7 @@ def bulk_record_listing_first_seen(rows: Iterable[tuple[str, object]]) -> None:
             to_create.append(
                 ListingFirstSeen(
                     listing_key=key,
-                    first_source_modification_timestamp=source_ts,
+                    first_source_modification_timestamp=_aware_utc(source_ts),
                 )
             )
         if not to_create:
@@ -122,7 +136,7 @@ def bulk_record_property_snapshots(rows: Iterable[tuple[str, object, str, object
                     listing_key=key,
                     list_price=list_price,
                     standard_status=(standard_status or "").strip(),
-                    source_modification_timestamp=source_ts,
+                    source_modification_timestamp=_aware_utc(source_ts),
                 )
             )
 

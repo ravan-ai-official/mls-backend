@@ -8,7 +8,7 @@ pages still render from the local row.
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.utils import timezone
@@ -84,11 +84,25 @@ def _int(value):
 
 
 def _dt(value):
+    """Parse AMPRE timestamps as timezone-aware UTC.
+
+    Offsetless strings are treated as UTC. Returning naive datetimes
+    triggers Django RuntimeWarnings under USE_TZ and pollutes
+    PropertySnapshot.source_modification_timestamp writes.
+    """
     if not value:
         return None
     if isinstance(value, str):
-        return parse_datetime(value.replace("Z", "+00:00")) or None
-    return value
+        parsed = parse_datetime(value.replace("Z", "+00:00"))
+    elif isinstance(value, datetime):
+        parsed = value
+    else:
+        return None
+    if parsed is None:
+        return None
+    if timezone.is_naive(parsed):
+        return timezone.make_aware(parsed, timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _date(value):

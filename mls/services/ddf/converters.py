@@ -82,6 +82,15 @@ def safe_bool(value):
 
 
 def safe_datetime(value):
+    """Parse a DDF datetime string into a timezone-aware UTC datetime.
+
+    DDF timestamps are UTC. Historically this stripped the tz with
+    `.replace(tzinfo=None)`, which made Django emit a RuntimeWarning
+    for every Property / ListingFirstSeen / PropertySnapshot row saved
+    once the project enabled USE_TZ — 6+ warnings per listing, 300k+
+    lines on a full catalogue sync. Keep UTC attached so the warning
+    never fires and the stored value is unambiguously UTC.
+    """
     if value in NULL_VALUES:
         return None
 
@@ -89,10 +98,13 @@ def safe_datetime(value):
         parsed_datetime = datetime.fromisoformat(
             str(value).replace("Z", "+00:00")
         )
-
-        return parsed_datetime.astimezone(pytz.UTC).replace(tzinfo=None)
     except (TypeError, ValueError):
         return None
+
+    if parsed_datetime.tzinfo is None:
+        # Source string had no offset — DDF default is UTC.
+        return parsed_datetime.replace(tzinfo=pytz.UTC)
+    return parsed_datetime.astimezone(pytz.UTC)
 
 
 def safe_date(value, default=None):
