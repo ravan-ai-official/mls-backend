@@ -1578,7 +1578,7 @@ class ListingSubmission(models.Model):
 
     @property
     def is_public(self):
-        return self.status == self.Status.APPROVED
+        return self.status == self.Status.APPROVED and self.publication_consent
 
     def __str__(self):
         return f"{self.address_line_1}, {self.city} ({self.get_status_display()})"

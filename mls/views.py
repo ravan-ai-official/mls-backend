@@ -989,8 +989,12 @@ class ListingSubmissionWithdrawAPIView(APIView):
 
 
 def _public_submissions():
+    """Only staff-approved, consenting submissions — never drafts or demos."""
     return (
-        ListingSubmission.objects.filter(status=ListingSubmission.Status.APPROVED)
+        ListingSubmission.objects.filter(
+            status=ListingSubmission.Status.APPROVED,
+            publication_consent=True,
+        )
         .prefetch_related("media")
         .order_by("-reviewed_at", "-submitted_at", "-id")
     )
@@ -1003,11 +1007,39 @@ def _int_param(request, name):
         return None
 
 
+def _available_cities(queryset) -> list[str]:
+    """Distinct non-blank cities from the (purpose-scoped) public set, A→Z."""
+    cities = (
+        queryset.exclude(city__isnull=True)
+        .exclude(city__exact="")
+        .values_list("city", flat=True)
+        .distinct()
+        .order_by("city")
+    )
+    # Preserve first-seen casing while sorting case-insensitively for the chips.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for city in cities:
+        key = city.strip()
+        if not key:
+            continue
+        lower = key.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        ordered.append(key)
+    return sorted(ordered, key=str.lower)
+
+
 class PublicListingSubmissionListAPIView(APIView):
     """Approved non-MLS listings (scope #13: Exclusive Assignments).
 
     Filters: purpose (sale|rent|assignment), city, price_min, price_max,
     beds_min, precon_property. Paginated: page, page_size (max 48).
+
+    Response always comes from the database (``source: "database"``). An empty
+    ``results`` array means there are no matching approved listings — clients
+    must show an empty state, never hardcoded sample cards.
     """
 
     permission_classes = [AllowAny]
@@ -1019,6 +1051,14 @@ class PublicListingSubmissionListAPIView(APIView):
         purpose = (request.query_params.get("purpose") or "").strip().lower()
         if purpose in ListingSubmission.Purpose.values:
             queryset = queryset.filter(purpose=purpose)
+            # Assignments without a price cannot render a card honestly.
+            if purpose == ListingSubmission.Purpose.ASSIGNMENT:
+                queryset = queryset.filter(asking_price__isnull=False)
+
+        # City chips should reflect inventory for the selected purpose, not the
+        # active city/price filter (otherwise selecting Toronto hides every other city).
+        available_cities = _available_cities(queryset)
+
         city = (request.query_params.get("city") or "").strip()
         if city:
             queryset = queryset.filter(city__iexact=city)
@@ -1043,6 +1083,8 @@ class PublicListingSubmissionListAPIView(APIView):
                 "count": total,
                 "page": page,
                 "page_size": page_size,
+                "source": "database",
+                "available_cities": available_cities,
                 "results": PublicListingSubmissionSerializer(rows, many=True, context={"request": request}).data,
             }
         )

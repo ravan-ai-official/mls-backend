@@ -410,11 +410,15 @@ class PublicListingSubmissionSerializer(serializers.ModelSerializer):
     def get_media(self, obj):
         # Filter the prefetched rows in Python: .filter() here issued one
         # query per submission and ignored prefetch_related("media").
-        return [
-            ListingSubmissionMediaSerializer(item, context=self.context).data
-            for item in obj.media.all()
-            if item.media_type == ListingSubmissionMedia.MediaType.PHOTO
-        ]
+        # Drop photos with no resolvable URL so cards never paint blank tiles.
+        rows = []
+        for item in obj.media.all():
+            if item.media_type != ListingSubmissionMedia.MediaType.PHOTO:
+                continue
+            payload = ListingSubmissionMediaSerializer(item, context=self.context).data
+            if (payload.get("file_url") or "").strip():
+                rows.append(payload)
+        return rows
 
 
 class WatchedMutationSerializer(serializers.Serializer):
