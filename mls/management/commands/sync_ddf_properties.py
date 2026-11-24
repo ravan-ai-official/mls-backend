@@ -27,6 +27,25 @@ from mls.snapshot_utils import (
 )
 
 
+# The DDF mapper emits a few keys that are not fields on the Property
+# model ('garages', 'garage_size', 'kitchens' as of the last schema
+# check). Passing them through to Property(**defaults) raises
+# "unexpected keyword arguments" and the whole page's upsert fails.
+# Compute the set of real Property fields once at import time and
+# strip anything outside it from the mapped defaults.
+_VALID_PROPERTY_FIELDS = {
+    field.name
+    for field in Property._meta.get_fields()
+    if getattr(field, "concrete", False) and not field.many_to_many
+}
+
+
+def _safe_property_defaults(raw_data):
+    """Map a DDF listing dict to Property kwargs, dropping unknown keys."""
+    mapped = map_property_defaults(raw_data)
+    return {k: v for k, v in mapped.items() if k in _VALID_PROPERTY_FIELDS}
+
+
 class Command(BaseCommand):
     """
     Sync DDF listings into the Property table. Append-only.
@@ -606,11 +625,7 @@ class Command(BaseCommand):
             if not key:
                 continue
 
-            defaults = (
-                map_property_defaults(
-                    data
-                )
-            )
+            defaults = _safe_property_defaults(data)
 
             first_seen_rows.append(
                 (
