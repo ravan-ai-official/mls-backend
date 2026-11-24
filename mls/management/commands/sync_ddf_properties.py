@@ -1,10 +1,8 @@
-import os
 import time
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connections, transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from mls.helpers import get_access_token
@@ -14,7 +12,7 @@ from mls.models import (
     Property,
     Room,
 )
-from mls.services.ddf.client import fetch_all_properties
+from mls.services.ddf.client import fetch_all_properties, iter_property_pages
 from mls.services.ddf.converters import (
     safe_bool,
     safe_decimal,
@@ -30,28 +28,19 @@ from mls.snapshot_utils import (
 
 
 class Command(BaseCommand):
-    help = "Sync Active DDF listings (full catalogue or 24h window)."
+    """
+    Sync DDF listings into the Property table. Append-only.
 
-    CACHE_POLICY_KEY = "ddf_cache_v2_initialized"
+    This command NEVER deletes Property rows. Every sync either INSERTS
+    new listings or UPDATES existing ones; stale rows are left in place.
+    The only deletions anywhere in this file are on Room / Media child
+    rows inside process_batch, and those are immediately re-created from
+    the fresh DDF payload (refresh semantics, not purge).
+    """
 
-    # DDF OData filter that restricts the feed to Active listings only.
-    # Applied by default on every code path; opt out with --all-statuses.
-    ACTIVE_STATUS_FILTER = "StandardStatus eq 'Active'"
-
-    # Active listings older than this are pruned on an incremental run.
-    # A `--full` sync skips this age-based prune entirely so the complete
-    # catalogue survives. Sold / de-listed rows use INACTIVE_RETENTION_DAYS
-    # (0 = keep forever). Override with env DDF_INACTIVE_RETENTION_DAYS.
-    CACHE_RETENTION_DAYS = 1
-    INACTIVE_RETENTION_DAYS = int(
-        os.environ.get("DDF_INACTIVE_RETENTION_DAYS", "90")
-    )
+    help = "Sync DDF listings (full catalogue or N-hour window). Append-only."
 
     INCREMENTAL_OVERLAP_MINUTES = 10
-
-    # Seed at most 2,500 recently modified listings when the cache
-    # starts empty.
-    INITIAL_CACHE_MAX_PAGES = 25
 
     GTA_CITIES = (
         "Toronto",
@@ -130,44 +119,11 @@ class Command(BaseCommand):
         )
 
         parser.add_argument(
-            "--retention-days",
-            type=int,
-            default=self.CACHE_RETENTION_DAYS,
-            help=(
-                "Keep DDF listings modified within this many days "
-                "(default: 1)."
-            ),
-        )
-
-        parser.add_argument(
             "--insert-new-only",
             action="store_true",
             help=(
                 "Insert unseen listing keys only; never update "
                 "existing DDF rows."
-            ),
-        )
-
-        parser.add_argument(
-            "--max-storage-mb",
-            type=int,
-            default=0,
-            help=(
-                "Maximum total PostgreSQL database size in MB. "
-                "0 (default) disables the storage cap so the full "
-                "DDF catalogue can be synced without pruning."
-            ),
-        )
-
-        parser.add_argument(
-            "--all-statuses",
-            action="store_true",
-            help=(
-                "Deprecated no-op kept for backward compatibility. "
-                "CREA DDF is Active-only upstream, so no status "
-                "filter is applied to the OData request. Non-Active "
-                "residue is cleaned up by expire_ghost_actives / "
-                "prune_expired_properties after the sync."
             ),
         )
 
@@ -189,24 +145,6 @@ class Command(BaseCommand):
                 "tier (default: 100)."
             ),
         )
-
-    def _apply_active_filter(
-        self,
-        filter_expression,
-        active_only,  # noqa: ARG002 — kept for callsite compatibility
-    ):
-        """
-        No-op passthrough.
-
-        CREA DDF is an Active-only feed at the upstream level, so there is
-        no need to add StandardStatus / ContractStatus to the `$filter`.
-        An earlier version tried `StandardStatus eq 'Active'` but DDF
-        rejects it with HTTP 400 because that field is not filterable in
-        OData. Non-Active residue (listings that transitioned to Expired
-        between syncs) is cleaned up by expire_ghost_actives /
-        prune_expired_properties.
-        """
-        return filter_expression
 
     def build_incremental_filter(self):
         """
@@ -252,43 +190,10 @@ class Command(BaseCommand):
                 "--window-hours must be >= 0."
             )
 
-        retention_days = options["retention_days"]
-
-        if retention_days < 1:
-            raise CommandError(
-                "--retention-days must be at least 1."
-            )
-
-        max_storage_mb = options["max_storage_mb"]
-
-        if max_storage_mb < 0:
-            raise CommandError(
-                "--max-storage-mb must be >= 0 (0 disables the cap)."
-            )
-
         if options["max_pages_per_tier"] < 1:
             raise CommandError(
                 "--max-pages-per-tier must be at least 1."
             )
-
-        active_only = not options["all_statuses"]
-        # A `--full` sync is meant to land the complete DDF catalogue and
-        # keep it. Running the age-based prune before/after would delete
-        # listings whose ModificationTimestamp is older than retention_days,
-        # which defeats the point of the full sync.
-        skip_prune = options["full"]
-
-        self.initialize_small_cache()
-
-        if not options["priority_cache"] and not skip_prune:
-            self.expire_ghost_actives(retention_days)
-            self.prune_expired_properties(
-                retention_days
-            )
-
-        self.enforce_storage_limit(
-            max_storage_mb
-        )
 
         cache_is_empty = not Property.objects.filter(
             category_type=Property.DDF
@@ -324,8 +229,6 @@ class Command(BaseCommand):
                     insert_new_only=options[
                         "insert_new_only"
                     ],
-                    max_storage_mb=max_storage_mb,
-                    active_only=active_only,
                 )
             )
 
@@ -355,75 +258,58 @@ class Command(BaseCommand):
                     self.build_incremental_filter()
                 )
 
-            max_pages = options["max_pages"]
-
             if cache_is_empty:
-                # First-ever seed: pull the full catalogue, no 25-page cap.
+                # First-ever seed: pull the full catalogue.
                 # Only an explicit --max-pages still bounds it (for testing).
                 filter_expression = None
-
                 self.stdout.write(
-                    "DDF cache is empty; seeding up to "
-                    f"{max_pages * 100:,} recently "
-                    "modified listings."
+                    "DDF cache is empty; seeding the full catalogue."
                 )
 
-            filter_expression = self._apply_active_filter(
-                filter_expression, active_only
+            # STREAMING UPSERT.
+            # Each page is committed to the DB before the next one is
+            # requested. Peak memory stays constant (~5 MB) regardless of
+            # catalogue size, rows land in near real time, and committed
+            # work survives interruption.
+            connections.close_all()
+            downloaded_count = 0
+            page_count = 0
+            pages_iter = iter_property_pages(
+                headers=headers,
+                filter_expression=filter_expression,
+                max_pages=max_pages,
+                progress_callback=self.stdout.write,
             )
-
-            all_properties, page_count = (
-                fetch_all_properties(
-                    headers=headers,
-                    filter_expression=filter_expression,
-                    max_pages=max_pages,
-                    progress_callback=self.stdout.write,
-                )
-            )
-
-            downloaded_count = len(
-                all_properties
-            )
+            for page in pages_iter:
+                page_count += 1
+                if not page:
+                    continue
+                try:
+                    self.process_batch(
+                        page,
+                        insert_new_only=options["insert_new_only"],
+                    )
+                except Exception as exc:
+                    self.stderr.write(
+                        self.style.WARNING(
+                            f"Page {page_count:,} upsert failed: {exc}. "
+                            "Continuing with next page."
+                        )
+                    )
+                    continue
+                downloaded_count += len(page)
 
             self.stdout.write(
-                f"Downloaded {page_count:,} pages "
-                f"containing "
-                f"{downloaded_count:,} listings."
+                f"Streamed {page_count:,} pages "
+                f"containing {downloaded_count:,} listings "
+                "into the DB."
             )
 
-            if not all_properties:
+            if downloaded_count == 0:
                 self.stdout.write(
                     "No properties returned."
                 )
                 return
-
-            self.stdout.write(
-                "Starting bulk upsert of "
-                f"{downloaded_count:,} properties..."
-            )
-
-            # A DDF download can run for a long time.
-            # Do not reuse an old idle DB connection.
-            connections.close_all()
-
-            self.bulk_upsert(
-                all_properties,
-                batch_size=options["batch_size"],
-                insert_new_only=options[
-                    "insert_new_only"
-                ],
-                max_storage_mb=max_storage_mb,
-            )
-
-        if not options["priority_cache"] and not skip_prune:
-            self.expire_ghost_actives(retention_days)
-            self.prune_expired_properties(
-                retention_days
-            )
-
-        self.enforce_storage_limit(
-            max_storage_mb
-        )
 
         self.stdout.write(
             "Rebuilding H3 map aggregates..."
@@ -505,8 +391,6 @@ class Command(BaseCommand):
         max_pages,
         batch_size,
         insert_new_only,
-        max_storage_mb,
-        active_only=True,
     ):
         """
         Fetch and commit each priority tier before requesting
@@ -554,16 +438,11 @@ class Command(BaseCommand):
                 "listings)..."
             )
 
-            tier_filter = self._apply_active_filter(
-                filter_expression,
-                active_only,
-            )
-
             properties, tier_pages = (
                 fetch_all_properties(
                     headers=headers,
                     filter_expression=(
-                        tier_filter
+                        filter_expression
                     ),
                     max_pages=tier_page_limit,
                     progress_callback=(
@@ -620,9 +499,6 @@ class Command(BaseCommand):
                 insert_new_only=(
                     insert_new_only
                 ),
-                max_storage_mb=(
-                    max_storage_mb
-                ),
             )
 
             self.stdout.write(
@@ -645,382 +521,11 @@ class Command(BaseCommand):
             page_count,
         )
 
-    def initialize_small_cache(self):
-        """
-        Discard the old full-catalogue cache exactly once.
-
-        After the initial reset, only the small rolling DDF cache
-        is maintained.
-        """
-        if ListingSyncStatus.objects.filter(
-            key=self.CACHE_POLICY_KEY
-        ).exists():
-            return
-
-        ddf_properties = (
-            Property.objects.filter(
-                category_type=Property.DDF
-            )
-        )
-
-        deleted_count = (
-            ddf_properties.count()
-        )
-
-        if deleted_count:
-            ddf_properties.delete()
-
-            self.stdout.write(
-                self.style.WARNING(
-                    f"Removed {deleted_count:,} "
-                    "old DDF listings to initialize "
-                    "the small rolling cache."
-                )
-            )
-
-            self.vacuum_ddf_tables()
-
-        ListingSyncStatus.objects.update_or_create(
-            key=self.CACHE_POLICY_KEY,
-            defaults={
-                "last_successful_at": (
-                    timezone.now()
-                ),
-                "listing_count": 0,
-            },
-        )
-
-    def vacuum_ddf_tables(self):
-        """
-        Physically reclaim PostgreSQL storage after a large
-        DDF deletion.
-        """
-        table_names = [
-            Property._meta.db_table,
-            Room._meta.db_table,
-            Media._meta.db_table,
-        ]
-
-        connection = connections[
-            "default"
-        ]
-
-        quoted_tables = ", ".join(
-            connection.ops.quote_name(
-                table_name
-            )
-            for table_name in table_names
-        )
-
-        self.stdout.write(
-            "Reclaiming database storage "
-            "from the old DDF cache..."
-        )
-
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "VACUUM (FULL, ANALYZE) "
-                f"{quoted_tables}"
-            )
-
-    def database_size_bytes(self):
-        """
-        Return the physical size of the current PostgreSQL
-        database.
-        """
-        with connections[
-            "default"
-        ].cursor() as cursor:
-            cursor.execute(
-                "SELECT "
-                "pg_database_size("
-                "current_database()"
-                ")"
-            )
-
-            return cursor.fetchone()[0]
-
-    def enforce_storage_limit(
-        self,
-        max_storage_mb,
-    ):
-        """
-        Prune oldest DDF cache records until the database is
-        below the configured storage limit.
-        """
-        if not max_storage_mb or int(max_storage_mb) <= 0:
-            # 0 (or unset) means "no cap" — skip pruning entirely so a
-            # full catalogue sync is not partially deleted.
-            return
-
-        if os.environ.get("DDF_DISABLE_PRUNING", "0") == "1":
-            self.stdout.write(
-                "DDF_DISABLE_PRUNING=1 — skipping storage-cap prune."
-            )
-            return
-
-        limit_bytes = (
-            max_storage_mb
-            * 1024
-            * 1024
-        )
-
-        current_size = (
-            self.database_size_bytes()
-        )
-
-        while current_size > limit_bytes:
-            ddf_properties = (
-                Property.objects.filter(
-                    category_type=Property.DDF
-                )
-            )
-
-            # Keep GTA records for as long as possible.
-            oldest_ids = list(
-                ddf_properties
-                .exclude(
-                    city__in=self.GTA_CITIES
-                )
-                .order_by(
-                    "modification_timestamp",
-                    "id",
-                )
-                .values_list(
-                    "id",
-                    flat=True,
-                )[:1000]
-            )
-
-            if not oldest_ids:
-                oldest_ids = list(
-                    ddf_properties
-                    .order_by(
-                        "modification_timestamp",
-                        "id",
-                    )
-                    .values_list(
-                        "id",
-                        flat=True,
-                    )[:1000]
-                )
-
-            if not oldest_ids:
-                raise CommandError(
-                    f"Database is "
-                    f"{current_size / 1024 / 1024:.1f} MB, "
-                    f"above the "
-                    f"{max_storage_mb} MB cap, "
-                    "but there are no DDF rows "
-                    "left to prune."
-                )
-
-            deleted_count, _ = (
-                Property.objects
-                .filter(
-                    id__in=oldest_ids
-                )
-                .delete()
-            )
-
-            self.stdout.write(
-                "Storage cap exceeded; "
-                f"deleted {deleted_count:,} "
-                "old DDF records and "
-                "reclaiming disk space."
-            )
-
-            self.vacuum_ddf_tables()
-
-            current_size = (
-                self.database_size_bytes()
-            )
-
-        self.stdout.write(
-            f"Database size: "
-            f"{current_size / 1024 / 1024:.1f} MB "
-            f"(cap: {max_storage_mb} MB)."
-        )
-
-    def expire_ghost_actives(self, retention_days):
-        """
-        Mark Active DDF rows that have not been refreshed as Expired.
-
-        CREA DDF never pushes Terminated/Expired — the listing simply
-        disappears. Without this step, those rows keep showing "For Sale"
-        at a stale price (the HouseSigma mismatch we saw on C14096360).
-        """
-        if os.environ.get("DDF_DISABLE_PRUNING", "0") == "1":
-            return
-
-        # Give incremental sync a little room past the retention window.
-        cutoff = timezone.now() - timedelta(days=max(int(retention_days), 1))
-        stale = (
-            Property.objects.filter(category_type=Property.DDF)
-            .filter(standard_status__iexact="Active")
-            .filter(
-                Q(modification_timestamp__lt=cutoff)
-                | Q(modification_timestamp__isnull=True)
-            )
-        )
-        count = stale.update(
-            standard_status="Expired",
-            status_change_timestamp=timezone.now(),
-        )
-        if count:
-            self.stdout.write(
-                f"Marked {count:,} stale Active DDF listings as Expired "
-                f"(not seen in feed for {retention_days}+ days)."
-            )
-
-    def prune_expired_properties(
-        self,
-        retention_days,
-    ):
-        """
-        Keep the Active rolling cache small, but retain Sold / De-listed
-        rows longer so those search tabs are not emptied every night.
-
-        CREA DDF is Active-only; once a home leaves the feed its row would
-        otherwise be deleted within ``retention_days`` and the Sold /
-        De-listed tabs would always show zero.
-        """
-        if os.environ.get("DDF_DISABLE_PRUNING", "0") == "1":
-            self.stdout.write(
-                "DDF_DISABLE_PRUNING=1 — skipping age-based prune."
-            )
-            return
-
-        from mls.services.query_helpers import STATUS_GROUPS
-
-        now = timezone.now()
-        active_cutoff = now - timedelta(days=retention_days)
-        inactive_cutoff = now - timedelta(days=self.INACTIVE_RETENTION_DAYS)
-
-        sold_statuses = list(STATUS_GROUPS["sold"])
-        delisted_statuses = list(STATUS_GROUPS["de-listed"])
-        inactive_q = Q()
-        for status_value in sold_statuses + delisted_statuses:
-            inactive_q |= Q(standard_status__iexact=status_value)
-
-        # Active (and anything not in an inactive group) — short retention.
-        active_stale = (
-            Property.objects.filter(category_type=Property.DDF)
-            .exclude(inactive_q)
-            .filter(
-                Q(modification_timestamp__lt=active_cutoff)
-                | Q(modification_timestamp__isnull=True)
-            )
-        )
-        active_count = active_stale.count()
-        if active_count:
-            active_stale.delete()
-            self.stdout.write(
-                f"Deleted {active_count:,} Active DDF listings older than "
-                f"{retention_days} days."
-            )
-
-        # Sold / de-listed — longer retention so tabs stay populated.
-        # 0 disables age-based pruning entirely (keep forever).
-        if self.INACTIVE_RETENTION_DAYS > 0:
-            inactive_stale = (
-                Property.objects.filter(category_type=Property.DDF)
-                .filter(inactive_q)
-                .filter(
-                    Q(modification_timestamp__lt=inactive_cutoff)
-                    | Q(modification_timestamp__isnull=True)
-                )
-            )
-            inactive_count = inactive_stale.count()
-            if inactive_count:
-                inactive_stale.delete()
-                self.stdout.write(
-                    f"Deleted {inactive_count:,} Sold/De-listed DDF listings older than "
-                    f"{self.INACTIVE_RETENTION_DAYS} days."
-                )
-
-    def cleanup_orphaned_properties(
-        self,
-        processed_keys,
-    ):
-        """
-        Delete DDF properties not present in a complete set
-        of processed listing keys.
-
-        This helper is intentionally not called automatically by
-        the rolling-cache sync.
-        """
-        if not processed_keys:
-            return
-
-        current_ddf_count = (
-            Property.objects.filter(
-                category_type=Property.DDF
-            ).count()
-        )
-
-        suspiciously_small = (
-            len(processed_keys)
-            < current_ddf_count * 0.5
-            and current_ddf_count > 100
-        )
-
-        if suspiciously_small:
-            self.stdout.write(
-                self.style.ERROR(
-                    "ABORTING CLEANUP: Processed "
-                    f"{len(processed_keys)} "
-                    "listings, which is < 50% "
-                    "of current database count "
-                    f"({current_ddf_count}). "
-                    "This might indicate an "
-                    "API failure."
-                )
-            )
-            return
-
-        self.stdout.write(
-            "Cleaning up orphaned MLS "
-            "properties..."
-        )
-
-        orphans = (
-            Property.objects
-            .filter(
-                category_type=Property.DDF
-            )
-            .exclude(
-                listing_key__in=(
-                    processed_keys
-                )
-            )
-        )
-
-        orphan_count = (
-            orphans.count()
-        )
-
-        if orphan_count > 0:
-            orphans.delete()
-
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"Deleted "
-                    f"{orphan_count:,} "
-                    "orphaned MLS listings."
-                )
-            )
-        else:
-            self.stdout.write(
-                "No orphaned listings found."
-            )
-
     def bulk_upsert(
         self,
         properties_data,
         batch_size=5000,
         insert_new_only=False,
-        max_storage_mb=280,
     ):
         """
         Persist DDF records in independent batches.
@@ -1051,10 +556,6 @@ class Command(BaseCommand):
                 insert_new_only=(
                     insert_new_only
                 ),
-            )
-
-            self.enforce_storage_limit(
-                max_storage_mb
             )
 
             self.stdout.write(
@@ -1476,21 +977,19 @@ class Command(BaseCommand):
         return result
 
 
-# CREA DDF is Active-only at the source, so no OData $filter on
-# StandardStatus is sent (DDF rejects it anyway). Non-Active residue is
-# removed by expire_ghost_actives / prune_expired_properties.
+# Append-only DDF sync — no Property rows are ever deleted by this file.
 #
-# Normal incremental sync (default — watermark-based):
-# python manage.py sync_ddf_properties --batch-size 8000
+# Incremental sync (watermark-based):
+#   python manage.py sync_ddf_properties --batch-size 8000
 #
-# Manual full resync (entire Active catalogue, no page / storage cap):
-# python manage.py sync_ddf_properties --full --batch-size 8000
+# Full catalogue sync:
+#   python manage.py sync_ddf_properties --full --batch-size 8000
 #
 # Scheduled 24h window (what the Celery beat task uses):
-# python manage.py sync_ddf_properties --window-hours 24 --batch-size 8000
+#   python manage.py sync_ddf_properties --window-hours 24 --batch-size 8000
 #
 # Testing with a page cap:
-# python manage.py sync_ddf_properties --max-pages 1 --batch-size 500
+#   python manage.py sync_ddf_properties --max-pages 1 --batch-size 500
 #
 # Priority GTA/Ontario cache:
-# python manage.py sync_ddf_properties --priority-cache
+#   python manage.py sync_ddf_properties --priority-cache

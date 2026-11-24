@@ -14,7 +14,7 @@ sudo docker rm -f ddf-full-sync 2>/dev/null || true
 
 echo "-- 3. Launching detached full-sync container --"
 sudo docker compose -f docker-compose.prod.yml run -d --rm --name ddf-full-sync backend \
-    python manage.py sync_ddf_properties --full --batch-size 8000 --max-storage-mb 16000
+    python manage.py sync_ddf_properties --full --batch-size 10000
 
 echo "-- 4. ddf-full-sync status --"
 sudo docker ps --filter name=ddf-full-sync --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'

@@ -36,8 +36,7 @@ def sync_ddf_listing_cache() -> dict:
     call_command(
         "sync_ddf_properties",
         window_hours=24,
-        batch_size=8000,
-        max_storage_mb=0,
+        batch_size=10000,
     )
     return {"ok": True}
 

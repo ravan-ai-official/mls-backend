@@ -1,25 +1,21 @@
-"""DDF realtime sync — upsert every 100 listings immediately.
+"""DDF realtime sync — upsert every 100 listings immediately. Append-only.
 
 Paste into:   python manage.py shell
 Or run with:  python manage.py shell < scripts/sync_ddf_realtime.py
 
 Each DDF page (100 listings) is fetched and written to the DB *before* the
 next page is requested. Rows appear in real time instead of after the full
-20-minute bulk-upsert phase.
+bulk-upsert phase at the end.
 
 Behaviour:
   * Walks DDF's $nextLink pagination manually.
-  * Reuses the Command.process_batch() method for the actual create/update,
-    so Property + Room + Media + first-seen + snapshot tables all stay in
-    sync with the stock management command.
-  * Refreshes the DDF OAuth token every TOKEN_REFRESH_EVERY pages (safety
-    net for runs longer than the token lifetime).
-  * Prints a live progress line every page: pages done, cumulative rows
-    upserted, current Active count in DB, per-page elapsed time.
-  * Runs expire_ghost_actives + prune_expired_properties at the end so the
-    DB reflects a true Active-only snapshot.
-  * Optional post-sync cleanup of any DDF row whose standard_status is not
-    exactly 'Active'.
+  * Reuses Command.process_batch() for create/update so Property + Room +
+    Media + first-seen + snapshot tables stay in sync with the stock
+    management command.
+  * Refreshes the DDF OAuth token every TOKEN_REFRESH_EVERY pages.
+  * Prints a live progress line per page.
+  * Does NOT delete anything — no prune, no expire, no cleanup.
+    This script is append-only; the DB only grows.
 """
 
 import sys
@@ -67,13 +63,13 @@ print(
 )
 
 # -------------------- knobs --------------------
-CLEANUP_NON_ACTIVE_AFTER_SYNC = True   # delete Cancelled/Expired/Closed/Withdrawn when done
-RUN_PRUNE_STEPS = True                 # expire_ghost_actives + prune_expired at the end
-MAX_PAGES = 0                           # 0 = no limit
-MAX_STORAGE_MB = 16000                  # DB size cap, enforced after every page
-PAGE_SLEEP_SECONDS = 0.2                # courtesy pause between pages
+# This script is APPEND-ONLY to match the sync_ddf_properties command.
+# Pruning and deletion knobs that used to live here have been removed —
+# every page is upserted and nothing is deleted.
+MAX_PAGES = 0                           # 0 = no page limit
+PAGE_SLEEP_SECONDS = 0.05               # courtesy pause between pages
 TOKEN_REFRESH_EVERY = 300               # re-check token this many pages in
-STATUS_FIELD_FILTER = "Active"          # DDF status to treat as "Active" post-cleanup
+STATUS_FIELD_FILTER = "Active"          # label used in the before/after breakdown only
 
 # -------------------- helpers --------------------
 def ddf_counts() -> tuple[int, int]:
@@ -170,12 +166,7 @@ while url:
     except Exception as exc:
         failed_pages += 1
         print(f"  [page {page}] upsert failed: {exc}. Skipping page.")
-    # 3. Enforce DB storage cap
-    try:
-        cmd.enforce_storage_limit(MAX_STORAGE_MB)
-    except Exception as exc:
-        print(f"  [page {page}] enforce_storage_limit error: {exc}")
-    # 4. Status line (live DB counts)
+    # 3. Status line (live DB counts)
     page_elapsed = time.monotonic() - page_t0
     total_now, active_now = ddf_counts()
     total_elapsed = time.monotonic() - started_at
@@ -205,34 +196,9 @@ print(
     f"(failed pages: {failed_pages}) ---"
 )
 
-# -------------------- post-sync prune + expire --------------------
-if RUN_PRUNE_STEPS:
-    print("\nRunning post-sync prune + expire steps...")
-    try:
-        cmd.expire_ghost_actives(1)          # retention_days
-    except TypeError:
-        cmd.expire_ghost_actives()
-    try:
-        cmd.prune_expired_properties(1)
-    except TypeError:
-        cmd.prune_expired_properties()
-    cmd.enforce_storage_limit(MAX_STORAGE_MB)
-
 # -------------------- AFTER snapshot --------------------
+# Append-only policy: no prune, no expire, no cleanup of non-Active rows.
+# Everything the feed returned is kept in the DB.
 print_breakdown("AFTER")
-
-# -------------------- optional cleanup --------------------
-if CLEANUP_NON_ACTIVE_AFTER_SYNC:
-    print("\n" + "=" * 60)
-    print("CLEANUP — deleting non-Active DDF rows")
-    print("=" * 60)
-    deleted, _ = (
-        Property.objects
-        .filter(category_type=Property.DDF)
-        .exclude(standard_status__iexact=STATUS_FIELD_FILTER)
-        .delete()
-    )
-    print(f"Deleted {deleted:,} rows")
-    print_breakdown("FINAL")
 
 print("\nDone.")

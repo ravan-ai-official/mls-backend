@@ -83,7 +83,12 @@ def get_page_with_retries(
         time.sleep(delay_seconds)
 
 
-def fetch_all_properties(
+# Courtesy pause between DDF pages. Kept small so a full catalogue sync
+# does not spend minutes asleep; DDF has not rate-limited at this tier.
+PAGE_SLEEP_SECONDS = 0.05
+
+
+def iter_property_pages(
     headers,
     filter_expression=None,
     max_pages=0,
@@ -91,120 +96,67 @@ def fetch_all_properties(
     select_fields=None,
 ):
     """
-    Download Property pages from the DDF API.
+    Generator variant of :func:`fetch_all_properties`.
 
-    Args:
-        headers:
-            HTTP request headers containing the DDF authorization token.
+    Yields one page (a list of ``dict``) at a time as it is downloaded,
+    so the caller can upsert rows into the database before the next page
+    is requested. Peak memory stays constant regardless of catalogue size
+    and progress is visible page-by-page.
 
-        filter_expression:
-            Optional OData $filter expression.
-
-        max_pages:
-            Maximum number of pages to download.
-            0 means no explicit page limit.
-
-        progress_callback:
-            Optional callable used to report progress.
-
-        select_fields:
-            Optional iterable of DDF Property fields to request using $select.
-
-    Returns:
-        tuple[list[dict], int]:
-            - downloaded property records
-            - number of downloaded pages
+    Final yield: an ``int`` giving the total number of pages downloaded.
     """
     params = {
         "$top": 100,
         "$orderby": "ModificationTimestamp desc",
     }
-
     if filter_expression:
         params["$filter"] = filter_expression
-
     if select_fields:
         params["$select"] = ",".join(select_fields)
 
-    all_properties = []
     url = DDF_PROPERTIES_URL
     page_count = 0
-
-    page_limit = max(
-        0,
-        int(max_pages or 0),
-    )
-
+    downloaded_total = 0
+    page_limit = max(0, int(max_pages or 0))
     download_started_at = time.monotonic()
 
-    while url and (
-        page_limit == 0
-        or page_count < page_limit
-    ):
-        next_page_number = page_count + 1
-
-        total_elapsed = (
-            time.monotonic()
-            - download_started_at
-        )
-
+    while url and (page_limit == 0 or page_count < page_limit):
         if progress_callback:
             progress_callback(
-                f"Requesting DDF page {next_page_number:,}... "
-                f"{len(all_properties):,} listings downloaded | "
-                f"elapsed {total_elapsed:.1f}s"
+                f"Requesting DDF page {page_count + 1:,}... "
+                f"{downloaded_total:,} listings downloaded | "
+                f"elapsed {time.monotonic() - download_started_at:.1f}s"
             )
 
         page_started_at = time.monotonic()
-
         response = get_page_with_retries(
             url,
             headers=headers,
             params=params if page_count == 0 else None,
             progress_callback=progress_callback,
         )
-
-        request_elapsed = (
-            time.monotonic()
-            - page_started_at
-        )
-
-        if progress_callback:
-            progress_callback(
-                f"Received HTTP {response.status_code} "
-                f"for page {next_page_number:,} "
-                f"after {request_elapsed:.1f}s"
-            )
+        request_elapsed = time.monotonic() - page_started_at
 
         response_data = response.json()
-
-        page_properties = (
-            response_data.get("value", [])
-            or []
-        )
-
-        all_properties.extend(page_properties)
+        page_properties = response_data.get("value", []) or []
+        next_url = response_data.get("@odata.nextLink")
 
         page_count += 1
-
-        next_url = response_data.get(
-            "@odata.nextLink"
-        )
+        downloaded_total += len(page_properties)
 
         if progress_callback:
             progress_callback(
-                f"Completed DDF page {page_count:,}: "
-                f"{len(page_properties):,} listings | "
-                f"{len(all_properties):,} total | "
-                f"more pages: "
-                f"{'yes' if next_url else 'no'}"
+                f"Page {page_count:,}: +{len(page_properties):,} rows "
+                f"({request_elapsed:.1f}s), total {downloaded_total:,}, "
+                f"more pages: {'yes' if next_url else 'no'}"
             )
+
+        yield page_properties
 
         url = next_url
         params = None
-
         if url:
-            time.sleep(0.2)
+            time.sleep(PAGE_SLEEP_SECONDS)
 
     if (
         progress_callback
@@ -213,10 +165,49 @@ def fetch_all_properties(
         and url
     ):
         progress_callback(
-            f"Stopped after reaching "
-            f"--max-pages={page_limit}."
+            f"Stopped after reaching --max-pages={page_limit}."
         )
 
+    # Sentinel final value so the caller can get the final page count.
+    return page_count
+
+
+def fetch_all_properties(
+    headers,
+    filter_expression=None,
+    max_pages=0,
+    progress_callback=None,
+    select_fields=None,
+):
+    """
+    Download Property pages from the DDF API and buffer them in memory.
+
+    Kept as a thin wrapper around :func:`iter_property_pages` so existing
+    callers that need the complete list up front keep working. New code
+    should prefer the streaming generator — it uses constant memory and
+    lets each page land in the DB before the next fetch.
+
+    Returns:
+        tuple[list[dict], int]:
+            - downloaded property records
+            - number of downloaded pages
+    """
+    all_properties: list = []
+    pages = iter_property_pages(
+        headers=headers,
+        filter_expression=filter_expression,
+        max_pages=max_pages,
+        progress_callback=progress_callback,
+        select_fields=select_fields,
+    )
+    page_count = 0
+    try:
+        while True:
+            all_properties.extend(next(pages))
+            page_count += 1
+    except StopIteration as stop:
+        if isinstance(stop.value, int):
+            page_count = stop.value
     return all_properties, page_count
 
 

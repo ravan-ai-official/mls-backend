@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# sync_ddf_active.sh — synchronous DDF full sync for Active properties only.
+# sync_ddf_active.sh — synchronous DDF full sync. APPEND-ONLY.
 #
-# DDF upstream (CREA) is an Active-only feed, so --full = all Active listings.
-# This script:
+# DDF upstream (CREA) is an Active-only feed, so --full fetches every
+# Active listing. This script:
 #   1. Checks the compose stack is up and there is no stale sync container.
 #   2. Snapshots current Active / Total DDF row counts.
 #   3. Launches `sync_ddf_properties --full` in a detached container.
 #   4. Blocks until the container exits, printing milestone log lines live.
 #   5. Snapshots final counts and reports the delta.
-#   6. Optionally deletes any DDF rows that aren't standard_status=Active
-#      (--cleanup). Run this only after a successful sync.
+#
+# This script NEVER deletes any Property row. A `--cleanup` option used
+# to exist that deleted non-Active DDF rows; it was removed to match the
+# append-only policy of the management command.
 #
 # Usage:
-#   sudo bash scripts/sync_ddf_active.sh                 # sync, keep inactive residue
-#   sudo bash scripts/sync_ddf_active.sh --cleanup       # sync, then delete non-Active rows
+#   sudo bash scripts/sync_ddf_active.sh                 # full sync
 #   sudo bash scripts/sync_ddf_active.sh --priority      # tier-by-tier commits
-#   sudo bash scripts/sync_ddf_active.sh --priority --cleanup
 #   sudo bash scripts/sync_ddf_active.sh --help
 #
 # Logs: every run also writes a full log to /var/log/ddf-sync-<timestamp>.log
@@ -24,12 +24,10 @@ set -euo pipefail
 
 COMPOSE_FILE="/opt/mls-backend/docker-compose.prod.yml"
 CONTAINER_NAME="ddf-full-sync"
-BATCH_SIZE=8000
-MAX_STORAGE_MB=16000
+BATCH_SIZE=10000
 POLL_INTERVAL=15      # seconds between progress polls
 LOG_FILE="/var/log/ddf-sync-$(date +%Y%m%d-%H%M%S).log"
 
-CLEANUP=false
 PRIORITY=false
 
 # ---------- helpers ----------
@@ -85,20 +83,14 @@ for r in rows: print(f\"  {(r['standard_status'] or 'NULL'):20s} : {r['n']:>8,}\
 "
 }
 
-delete_non_active_ddf() {
-    py_in_backend "
-import django; django.setup()
-from mls.models import Property
-n, _ = Property.objects.filter(category_type=Property.DDF).exclude(standard_status__iexact='Active').delete()
-print(n)
-"
-}
-
 # ---------- parse args ----------
 for arg in "$@"; do
     case "$arg" in
-        --cleanup)  CLEANUP=true ;;
         --priority) PRIORITY=true ;;
+        --cleanup)
+            fail "--cleanup was removed — this script is now append-only. See sync_ddf_properties.py NEVER_DELETE policy."
+            exit 1
+            ;;
         -h|--help)  usage ;;
         *) fail "Unknown option: $arg"; exit 1 ;;
     esac
@@ -136,8 +128,7 @@ log "  breakdown:"
 breakdown_ddf | tee -a "$LOG_FILE"
 
 # ---------- 3. launch detached container ----------
-CMD=(python manage.py sync_ddf_properties --full
-     --batch-size "$BATCH_SIZE" --max-storage-mb "$MAX_STORAGE_MB")
+CMD=(python manage.py sync_ddf_properties --full --batch-size "$BATCH_SIZE")
 if $PRIORITY; then
     CMD+=(--priority-cache)
     step "Launching sync in priority-cache mode (GTA tier first, incremental commits)"
@@ -206,25 +197,6 @@ log "  Total  DDF rows : ${AFTER_TOTAL}  (delta ${DELTA_TOTAL:+${DELTA_TOTAL}}${
 log "  non-Active rows : ${NON_ACTIVE}"
 log "  breakdown:"
 breakdown_ddf | tee -a "$LOG_FILE"
-
-# ---------- 6. optional cleanup ----------
-if $CLEANUP; then
-    if [ "$NON_ACTIVE" -gt 0 ]; then
-        step "Deleting ${NON_ACTIVE} non-Active DDF rows (Cancelled/Expired/Closed/Withdrawn/NULL)"
-        DELETED=$(delete_non_active_ddf)
-        ok "deleted ${DELETED} rows"
-        FINAL_ACTIVE=$(count_active_ddf)
-        FINAL_TOTAL=$(count_total_ddf)
-        log "  final Active DDF: ${FINAL_ACTIVE}"
-        log "  final Total  DDF: ${FINAL_TOTAL}"
-    else
-        ok "no non-Active DDF rows to clean up"
-    fi
-else
-    if [ "$NON_ACTIVE" -gt 0 ]; then
-        warn "${NON_ACTIVE} non-Active DDF rows remain. Re-run with --cleanup to delete them."
-    fi
-fi
 
 # ---------- tidy up ----------
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true

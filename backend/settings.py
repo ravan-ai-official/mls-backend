@@ -425,7 +425,7 @@ PUBLIC_BACKEND_URL = os.environ.get('PUBLIC_BACKEND_URL', 'http://127.0.0.1:8000
 
 # Frontend base URL — used when building email links (e.g. verification links).
 # Example: https://app.ravan.ai   or   https://staging.vsell4u.ca
-FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://app.ravan.ai')
+FRONTEND_URL = os.environ.get('FRONTEND_URL')
 
 # How long (in hours) a verification token stays valid. Default: 24 h.
 EMAIL_VERIFICATION_EXPIRY_HOURS = int(os.environ.get('EMAIL_VERIFICATION_EXPIRY_HOURS', '24'))
@@ -509,7 +509,7 @@ ESTATE_DOCUMENT_MAX_BYTES = int(os.environ.get("ESTATE_DOCUMENT_MAX_BYTES", str(
 # JWT
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': False,
 }
