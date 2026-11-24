@@ -413,7 +413,9 @@ def site_context(question: str) -> dict:
         try:
             assignments = ListingSubmission.objects.filter(
                 status=ListingSubmission.Status.APPROVED,
+                publication_consent=True,
                 purpose=ListingSubmission.Purpose.ASSIGNMENT,
+                asking_price__isnull=False,
             )
             if intent["city"]:
                 assignments = assignments.filter(city__icontains=intent["city"])

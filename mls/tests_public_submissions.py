@@ -19,8 +19,45 @@ class FakeQS(list):
     def filter(self, **kwargs):
         return FakeQS(s for s in self if all(getattr(s, k) == v for k, v in kwargs.items()))
 
-    def exclude(self, pk):
-        return FakeQS(s for s in self if s.pk != pk)
+    def exclude(self, pk=None, **kwargs):
+        rows = [s for s in self if s.pk != pk] if pk is not None else list(self)
+        for key, value in kwargs.items():
+            if key.endswith("__isnull"):
+                field = key[: -len("__isnull")]
+                # exclude(field__isnull=True) keeps non-null rows.
+                if value:
+                    rows = [s for s in rows if getattr(s, field, None) is not None]
+                else:
+                    rows = [s for s in rows if getattr(s, field, None) is None]
+            elif key.endswith("__exact"):
+                field = key[: -len("__exact")]
+                rows = [s for s in rows if getattr(s, field, None) != value]
+            else:
+                rows = [s for s in rows if getattr(s, key, None) != value]
+        return FakeQS(rows)
+
+    def values_list(self, *fields, flat=False):
+        if flat and len(fields) == 1:
+            return FakeValues([getattr(s, fields[0]) for s in self])
+        return FakeValues([tuple(getattr(s, f) for f in fields) for s in self])
+
+    def distinct(self):
+        return self
+
+    def order_by(self, *args):
+        return self
+
+
+class FakeValues(list):
+    def distinct(self):
+        seen = []
+        for item in self:
+            if item not in seen:
+                seen.append(item)
+        return FakeValues(seen)
+
+    def order_by(self, *args):
+        return FakeValues(sorted(self, key=lambda value: str(value).lower()))
 
 
 class SimilarTests(SimpleTestCase):
@@ -42,6 +79,23 @@ class SimilarTests(SimpleTestCase):
         subject = sub(1, price="700000")
         others = [sub(2, price="1400000"), sub(3, price="710000")]
         self.assertEqual(self.rank(subject, others), [3, 2])
+
+
+class AvailableCitiesTests(SimpleTestCase):
+    def test_dedupes_and_sorts_case_insensitively(self):
+        qs = FakeQS(
+            [
+                sub(1, city="Toronto"),
+                sub(2, city="vaughan"),
+                sub(3, city="Toronto"),
+                sub(4, city="  "),
+                sub(5, city="Mississauga"),
+            ]
+        )
+        self.assertEqual(
+            views._available_cities(qs),
+            ["Mississauga", "Toronto", "vaughan"],
+        )
 
 
 class HomeTypeFilterTests(SimpleTestCase):
