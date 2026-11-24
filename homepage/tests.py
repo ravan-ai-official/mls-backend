@@ -24,7 +24,7 @@ from homepage.services.rent_estimates import (
     investor_metrics,
     rank_candidates,
 )
-from homepage.services.feeds import _is_complete_sold_below_row
+from homepage.services.feeds import _has_sold_below_image, _is_complete_sold_below_row
 from homepage.services.sold_below import find_repeat_sale_losses, normalise_address
 
 
@@ -176,6 +176,11 @@ class SoldBelowTests(SimpleTestCase):
         self.assertFalse(_is_complete_sold_below_row({**valid, "close_price": 0}))
         self.assertFalse(
             _is_complete_sold_below_row({**valid, "previous_close_price": 1_000_000, "loss_amount": -1})
+        )
+        self.assertFalse(_has_sold_below_image(valid))
+        self.assertFalse(_has_sold_below_image({**valid, "image_url": "  "}))
+        self.assertTrue(
+            _has_sold_below_image({**valid, "image_url": "https://cdn.example/a.jpg"})
         )
 
 
