@@ -88,7 +88,10 @@ def _photos(listing_keys: Iterable[str]) -> dict[str, str]:
         .values_list("property__listing_key", "media_url")
     )
     for key, url in rows:
-        photos.setdefault(key, url)
+        media_url = (url or "").strip()
+        if not media_url:
+            continue
+        photos.setdefault(key, media_url)
     return photos
 
 
@@ -366,6 +369,34 @@ def _is_complete_sold_below_row(row: dict[str, Any]) -> bool:
     )
 
 
+def _has_sold_below_image(row: dict[str, Any]) -> bool:
+    """Homepage cards need a real photo; blank slots look like missing sold data."""
+    return bool((row.get("image_url") or "").strip())
+
+
+def _attach_sold_below_photos(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill ``image_url`` from local Media, then AMPRE for keys still missing.
+
+    Sold-below listing keys are AMPRE ListingKeys. Many are not in the local
+    DDF Media table, so without the AMPRE fallback every card renders blank.
+    """
+    if not rows:
+        return rows
+    local = _photos(row["listing_key"] for row in rows if row.get("listing_key"))
+    need_ampre = [
+        row["listing_key"]
+        for row in rows
+        if row.get("listing_key") and not (row.get("image_url") or local.get(row["listing_key"]))
+    ]
+    ampre_photos = _ampre_primary_photos(need_ampre) if need_ampre else {}
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        key = row.get("listing_key") or ""
+        image = (row.get("image_url") or "").strip() or local.get(key) or ampre_photos.get(key)
+        enriched.append({**row, "image_url": image or None})
+    return enriched
+
+
 def _sold_below_from_table(limit: int, cities: list[str] | None) -> tuple[list[dict[str, Any]], str | None]:
     from homepage.models import SoldBelowPurchase
 
@@ -500,13 +531,15 @@ def sold_below_purchase(
     cities: list[str] | None = None,
 ) -> dict[str, Any]:
     preferred = [c for c in (cities or ([city] if city else [])) if c]
-    rows, computed_at = _sold_below_from_table(limit, preferred or None)
+    # Pull extra candidates so imageless rows can be skipped after photo attach.
+    fetch_limit = max(limit * 4, limit)
+    rows, computed_at = _sold_below_from_table(fetch_limit, preferred or None)
     rows = [row for row in rows if _is_complete_sold_below_row(row)]
     source = "table"
-    if len(rows) < limit:
+    if len(rows) < fetch_limit:
         local = [
             row
-            for row in _sold_below_from_local(limit, preferred or None)
+            for row in _sold_below_from_local(fetch_limit, preferred or None)
             if _is_complete_sold_below_row(row)
         ]
         if local:
@@ -516,7 +549,7 @@ def sold_below_purchase(
                     continue
                 rows.append(row)
                 seen.add(row["listing_key"])
-                if len(rows) >= limit:
+                if len(rows) >= fetch_limit:
                     break
             source = "table+local" if computed_at else "local"
             computed_at = computed_at or timezone.now().isoformat()
@@ -524,7 +557,7 @@ def sold_below_purchase(
         try:
             live = [
                 row
-                for row in _sold_below_from_ampre(limit, preferred or None)
+                for row in _sold_below_from_ampre(fetch_limit, preferred or None)
                 if _is_complete_sold_below_row(row)
             ]
         except Exception as exc:  # noqa: BLE001 — feed must degrade, not 500
@@ -537,11 +570,17 @@ def sold_below_purchase(
                     continue
                 rows.append(row)
                 seen.add(row["listing_key"])
-                if len(rows) >= limit:
+                if len(rows) >= fetch_limit:
                     break
             source = f"{source}+ampre" if rows else "ampre"
             computed_at = computed_at or timezone.now().isoformat()
-    results = [row for row in rows[:limit] if _is_complete_sold_below_row(row)]
+    rows = _attach_sold_below_photos(rows)
+    # Only return cards the homepage can actually show (sale facts + a photo).
+    results = [
+        row
+        for row in rows
+        if _is_complete_sold_below_row(row) and _has_sold_below_image(row)
+    ][:limit]
     return {
         "results": results,
         "count": len(results),

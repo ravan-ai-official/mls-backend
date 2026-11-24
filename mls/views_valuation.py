@@ -112,8 +112,6 @@ def _property_to_lookup_payload(p: Property) -> Dict[str, Any]:
         "lot_frontage": float(p.frontage_length_numeric) if p.frontage_length_numeric else None,
         "lot_depth": float(depth) if depth is not None else None,
         "lot_size_dimensions": p.lot_size_dimensions or "",
-        "year_built": p.year_built,
-        "age": (timezone.now().year - p.year_built) if p.year_built else None,
     }
 
 
@@ -284,12 +282,8 @@ class ValuationEstimateAPIView(APIView):
         if living is None and prop and prop.above_grade_finished_area:
             living = prop.above_grade_finished_area
 
-        year_built = _int_or_none(body.get("year_built"))
-        age = _int_or_none(body.get("age"))
-        # Age alone is enough: convert to year built for the hedonic model.
-        if year_built is None and age is not None and 0 <= age <= 250:
-            year_built = timezone.now().year - age
-
+        # year_built / age are not form inputs. When a listing is linked, use
+        # the feed value for comps/hedonic; otherwise leave unset.
         subject: Dict[str, Any] = {
             "latitude": lat,
             "longitude": lng,
@@ -305,7 +299,7 @@ class ValuationEstimateAPIView(APIView):
             "tax_annual_amount": _float_or_none(body.get("tax_annual_amount")),
             "lot_frontage": _float_or_none(body.get("lot_frontage")),
             "lot_depth": _float_or_none(body.get("lot_depth")),
-            "year_built": year_built,
+            "year_built": prop.year_built if prop else None,
             "last_sold_price": _float_or_none(body.get("last_sold_price")),
             "last_sold_date": body.get("last_sold_date") or None,
         }
@@ -331,8 +325,6 @@ class ValuationEstimateAPIView(APIView):
                 )
                 if d is not None:
                     subject["lot_depth"] = float(d)
-            if subject["year_built"] is None:
-                subject["year_built"] = prop.year_built
             if subject["last_sold_price"] is None and prop.close_price:
                 subject["last_sold_price"] = float(prop.close_price)
             if not subject["last_sold_date"] and prop.close_date:

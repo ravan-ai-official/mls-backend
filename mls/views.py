@@ -1078,9 +1078,13 @@ def similar_public_submissions(submission, limit: int = 4) -> list:
         value = 0.0
         if submission.precon_property_id and other.precon_property_id == submission.precon_property_id:
             value += 3
-        if submission.builder_name and other.builder_name.strip().lower() == submission.builder_name.strip().lower():
+        sub_builder = (submission.builder_name or "").strip().lower()
+        other_builder = (other.builder_name or "").strip().lower()
+        if sub_builder and other_builder == sub_builder:
             value += 1
-        if other.city.strip().lower() == submission.city.strip().lower():
+        sub_city = (submission.city or "").strip().lower()
+        other_city = (other.city or "").strip().lower()
+        if sub_city and other_city == sub_city:
             value += 2
         if price and other.asking_price:
             value += max(0.0, 1 - abs(float(other.asking_price) - price) / price)

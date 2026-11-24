@@ -187,7 +187,7 @@ class MediaDetailSerializer(serializers.ModelSerializer):
 
 class PropertyDetailSerializer(serializers.ModelSerializer):
     rooms = RoomSerializer(many=True, read_only=True)
-    media = MediaSerializer(many=True, read_only=True)
+    media = serializers.SerializerMethodField()
     next_open_house = serializers.SerializerMethodField()
 
     class Meta:
@@ -199,6 +199,17 @@ class PropertyDetailSerializer(serializers.ModelSerializer):
     @extend_schema_field(OpenApiTypes.OBJECT)
     def get_next_open_house(self, obj):
         return PropertySerializer.get_next_open_house(self, obj)
+
+    @extend_schema_field(MediaSerializer(many=True))
+    def get_media(self, obj):
+        """Omit blank CDN rows so the gallery never paints empty photo tiles."""
+        rows = []
+        for item in obj.media.all():
+            url = (getattr(item, "media_url", None) or "").strip()
+            has_file = bool(getattr(item, "media_file", None) and getattr(item.media_file, "name", ""))
+            if url or has_file:
+                rows.append(item)
+        return MediaSerializer(rows, many=True, context=self.context).data
 
 
 class UserFeedbackSerializer(serializers.ModelSerializer):

@@ -1389,6 +1389,48 @@ class ValuationAPITests(TestCase):
         self.assertIn("sparse", data)
         self.assertTrue(data["beta"])
 
+    def test_lookup_omits_age_and_year_built(self):
+        Property.objects.filter(pk=self.p.pk).update(year_built=1998)
+        r = self.client.get("/api/mls/valuation/lookup/", {"listing_key": self.p.listing_key})
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertNotIn("year_built", data)
+        self.assertNotIn("age", data)
+
+    def test_estimate_ignores_body_age_and_year_built(self):
+        Property.objects.filter(pk=self.p.pk).update(year_built=2005)
+        body = {
+            "listing_key": self.p.listing_key,
+            "latitude": float(self.p.latitude),
+            "longitude": float(self.p.longitude),
+            "postal_code": self.p.postal_code,
+            "city": self.p.city,
+            "property_sub_type": "Condo",
+            "bedrooms_total": 2,
+            "bathrooms_total": 2,
+            "living_area": 1100,
+            "year_built": 1900,
+            "age": 120,
+        }
+        with mock.patch("mls.views_valuation.select_comps") as select_comps:
+            select_comps.return_value = []
+            with mock.patch("mls.views_valuation.select_active_comps", return_value=[]):
+                with mock.patch("mls.views_valuation.apply_hedonic") as apply_hedonic:
+                    apply_hedonic.return_value = {
+                        "point": 0,
+                        "low": 0,
+                        "high": 0,
+                        "breakdown": [],
+                    }
+                    r = self.client.post(
+                        "/api/mls/valuation/estimate/",
+                        data=json.dumps(body),
+                        content_type="application/json",
+                    )
+                    self.assertEqual(r.status_code, 200)
+                    subject = select_comps.call_args[0][0]
+                    self.assertEqual(subject.get("year_built"), 2005)
+
 
 class PropertySummaryPrefetchTests(TestCase):
     """PropertySerializer(many=True) batches the photo and open-house lookups."""
