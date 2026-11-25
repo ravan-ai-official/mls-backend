@@ -8,7 +8,7 @@ pages still render from the local row.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 
 from django.utils import timezone
@@ -43,9 +43,7 @@ SELECT_FIELDS = [
     "BedroomsAboveGrade",
     "BedroomsBelowGrade",
     "BathroomsTotalInteger",
-    "LivingArea",
-    "LivingAreaMinimum",
-    "LivingAreaMaximum",
+    # LivingArea* / BuildingFeatures / CommonInterest are not in AMPRE Property.
     "AboveGradeFinishedArea",
     "BuildingAreaTotal",
     "YearBuilt",
@@ -56,8 +54,6 @@ SELECT_FIELDS = [
     "AssociationFeeIncludes",
     "ParkingTotal",
     "ParkingFeatures",
-    "BuildingFeatures",
-    "CommonInterest",
     "PublicRemarks",
     "OriginalEntryTimestamp",
     "ModificationTimestamp",
@@ -101,8 +97,8 @@ def _dt(value):
     if parsed is None:
         return None
     if timezone.is_naive(parsed):
-        return timezone.make_aware(parsed, timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return timezone.make_aware(parsed, dt_timezone.utc)
+    return parsed.astimezone(dt_timezone.utc)
 
 
 def _date(value):

@@ -1,16 +1,16 @@
 """
-Pull Closed / Expired / Cancelled / Withdrawn listings from AMPRE
-into the local Property table so Sold and De-listed tabs have rows.
+Pull AMPRE listings (all statuses) into the local Property table.
 
-CREA DDF (realtor.ca) is Active-only, so pulling more Active listings never
-fills those tabs. AMPRE carries the off-market history the tabs need.
+CREA DDF is Active-only, so Closed / Expired / Cancelled / Withdrawn
+(and TRREB Active gaps) are filled from AMPRE. Syncs every property
+type except Agriculture / Farm / Industrial.
 
 Append-only: this command NEVER deletes Property rows. It only inserts
 new listings or updates existing ones.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 
 from django.core.management.base import BaseCommand, CommandError
@@ -18,7 +18,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
-from homepage.services.ampre import RESIDENTIAL_CLAUSE, city_clause
+from homepage.services.ampre import city_clause
 from mls.models import ListingSyncStatus, Property
 from mls.services.ampre_client import AmpreClientError, fetch_property_page
 from mls.services.ampre_media import (
@@ -26,6 +26,7 @@ from mls.services.ampre_media import (
     refresh_property_media_from_ampre,
 )
 from mls.services.listing_sync_status import clear_cache as clear_listing_sync_status_cache
+from mls.services.sync_filters import EXCLUDE_AG_INDUSTRY_CLAUSE
 from mls.views_market import GTA_CITIES
 
 
@@ -50,9 +51,9 @@ SELECT_FIELDS = [
     "BedroomsAboveGrade",
     "BedroomsBelowGrade",
     "BathroomsTotalInteger",
-    "LivingArea",
-    "LivingAreaMinimum",
-    "LivingAreaMaximum",
+    # LivingArea / LivingAreaMinimum / LivingAreaMaximum / BuildingFeatures /
+    # CommonInterest are NOT in AMPRE Property metadata — selecting them
+    # returns HTTP 400 ("property ... is not defined in type 'Property'").
     "AboveGradeFinishedArea",
     "BuildingAreaTotal",
     "YearBuilt",
@@ -63,8 +64,6 @@ SELECT_FIELDS = [
     "AssociationFeeIncludes",
     "ParkingTotal",
     "ParkingFeatures",
-    "BuildingFeatures",
-    "CommonInterest",
     "Latitude",
     "Longitude",
     "PublicRemarks",
@@ -105,8 +104,8 @@ def _dt(value):
     if parsed is None:
         return None
     if timezone.is_naive(parsed):
-        return timezone.make_aware(parsed, timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return timezone.make_aware(parsed, dt_timezone.utc)
+    return parsed.astimezone(dt_timezone.utc)
 
 
 def _date(value):
@@ -135,6 +134,9 @@ INACTIVE_STATUS_FILTER = (
     "or StandardStatus eq 'Terminated'"
     ")"
 )
+
+# All non-ag / non-industrial types (Residential, Commercial, Retail, …).
+TYPE_CLAUSE = EXCLUDE_AG_INDUSTRY_CLAUSE
 
 # Fields written on every upsert (everything map_ampre_inactive returns
 # except category_type, which we never overwrite on existing rows).
@@ -181,8 +183,9 @@ _UPDATE_FIELDS = [
 
 class Command(BaseCommand):
     help = (
-        "Upsert AMPRE Closed/Expired/Cancelled/Withdrawn listings. "
-        "Append-only — never deletes Property rows."
+        "Upsert AMPRE listings for all statuses "
+        "(Active / Closed / De-listed), excluding Agriculture / "
+        "Industrial. Append-only — never deletes Property rows."
     )
 
     def add_arguments(self, parser):
@@ -243,30 +246,52 @@ class Command(BaseCommand):
             max_rows = max(50_000, int(options["max_rows_per_city"]))
         else:
             max_rows = max(50, int(options["max_rows_per_city"]))
-        skip_media = bool(options["skip_media"]) or is_full
+        # Media is part of a complete sync. Only skip when the operator
+        # explicitly passes --skip-media (e.g. a data-only emergency run).
+        skip_media = bool(options["skip_media"])
 
         if is_full:
-            mode_label = "full catalogue"
-            closed_extra = f"and {RESIDENTIAL_CLAUSE}"
-            delisted_extra = f"and {RESIDENTIAL_CLAUSE}"
-            closed_order = "ModificationTimestamp desc"
+            # AMPRE returns HTTP 400 on unbounded Closed/De-listed queries.
+            # Use a long CloseDate / ModificationTimestamp lookback instead
+            # of dropping the temporal filter entirely.
+            today = timezone.now().date()
+            start = (today - timedelta(days=3650)).isoformat()
+            end = (today + timedelta(days=1)).isoformat()
+            mode_label = f"full catalogue (~10y lookback {start} .. {end})"
+            active_extra = (
+                f"and {TYPE_CLAUSE} "
+                f"and ModificationTimestamp ge {start}T00:00:00Z"
+            )
+            closed_extra = (
+                f"and {TYPE_CLAUSE} "
+                f"and CloseDate ge {start} and CloseDate le {end}"
+            )
+            delisted_extra = (
+                f"and {TYPE_CLAUSE} "
+                f"and ModificationTimestamp ge {start}T00:00:00Z"
+            )
+            closed_order = "CloseDate desc"
         elif window_hours:
             cutoff = timezone.now() - timedelta(hours=window_hours)
             # OData needs a Zulu literal; strip microseconds for compatibility.
             cutoff_lit = (
-                cutoff.astimezone(timezone.utc)
+                cutoff.astimezone(dt_timezone.utc)
                 .replace(microsecond=0)
                 .strftime("%Y-%m-%dT%H:%M:%SZ")
             )
             mode_label = f"window={window_hours}h since {cutoff_lit}"
             # ModificationTimestamp covers both newly created and newly
-            # updated Closed / De-listed rows.
+            # updated rows across Active / Closed / De-listed.
+            active_extra = (
+                f"and {TYPE_CLAUSE} "
+                f"and ModificationTimestamp ge {cutoff_lit}"
+            )
             closed_extra = (
-                f"and {RESIDENTIAL_CLAUSE} "
+                f"and {TYPE_CLAUSE} "
                 f"and ModificationTimestamp ge {cutoff_lit}"
             )
             delisted_extra = (
-                f"and {RESIDENTIAL_CLAUSE} "
+                f"and {TYPE_CLAUSE} "
                 f"and ModificationTimestamp ge {cutoff_lit}"
             )
             closed_order = "ModificationTimestamp desc"
@@ -275,17 +300,24 @@ class Command(BaseCommand):
             start = (today - timedelta(days=days)).isoformat()
             end = (today + timedelta(days=1)).isoformat()
             mode_label = f"days={days} ({start} .. {end})"
+            active_extra = (
+                f"and {TYPE_CLAUSE} "
+                f"and ModificationTimestamp ge {start}T00:00:00Z"
+            )
             closed_extra = (
-                f"and {RESIDENTIAL_CLAUSE} "
+                f"and {TYPE_CLAUSE} "
                 f"and CloseDate ge {start} and CloseDate le {end}"
             )
             delisted_extra = (
-                f"and {RESIDENTIAL_CLAUSE} "
+                f"and {TYPE_CLAUSE} "
                 f"and ModificationTimestamp ge {start}T00:00:00Z"
             )
             closed_order = "CloseDate desc"
 
-        self.stdout.write(f"AMPRE sync mode: {mode_label} (append-only)")
+        self.stdout.write(
+            f"AMPRE sync mode: {mode_label} "
+            "(all statuses; excludes Agriculture / Industrial; append-only)"
+        )
 
         created = 0
         updated = 0
@@ -297,6 +329,12 @@ class Command(BaseCommand):
             city_filter = city_clause([city])
 
             queries = [
+                (
+                    "Active",
+                    f"({city_filter}) and StandardStatus eq 'Active' "
+                    f"and TransactionType eq 'For Sale' {active_extra}",
+                    "ModificationTimestamp desc",
+                ),
                 (
                     "Closed",
                     f"({city_filter}) and StandardStatus eq 'Closed' "
@@ -313,6 +351,7 @@ class Command(BaseCommand):
 
             for label, filter_expression, orderby in queries:
                 self.stdout.write(f"{city} · {label}...")
+                self.stdout.flush()
                 try:
                     rows = fetch_property_page(
                         filter_expression=filter_expression,
@@ -320,11 +359,17 @@ class Command(BaseCommand):
                         orderby=orderby,
                         top=min(1000, max_rows),
                         max_rows=max_rows,
+                        progress_callback=self.stdout.write,
                     )
                 except AmpreClientError as exc:
                     self.stderr.write(self.style.WARNING(f"  skipped: {exc}"))
                     continue
 
+                self.stdout.write(
+                    f"  upserting {len(rows):,} rows"
+                    f"{'' if skip_media else ' (+ media fill)'}..."
+                )
+                self.stdout.flush()
                 fetched += len(rows)
                 c, u, s, m = self._bulk_upsert_rows(
                     rows,
@@ -394,7 +439,8 @@ class Command(BaseCommand):
             if existing:
                 new_mt = defaults.get("modification_timestamp")
                 old_mt = existing.modification_timestamp
-                # Skip DB write when upstream has not moved.
+                # Skip property-field write when upstream has not moved,
+                # but still queue the row for empty-gallery media fill.
                 if (
                     old_mt is not None
                     and new_mt is not None
@@ -403,6 +449,7 @@ class Command(BaseCommand):
                     == (defaults.get("standard_status") or "")
                 ):
                     skipped += 1
+                    media_candidates.append(existing)
                     continue
 
                 for field, value in defaults.items():
@@ -448,20 +495,55 @@ class Command(BaseCommand):
             .values_list("id", flat=True)
         )
         by_id = {p.id: p for p in media_candidates if getattr(p, "id", None)}
-        for prop_id in empty_ids:
-            prop = by_id.get(prop_id)
-            if prop is None or not is_trreb_property(prop):
-                continue
+        empty_list = [
+            by_id[i]
+            for i in empty_ids
+            if i in by_id and is_trreb_property(by_id[i])
+        ]
+        total_empty = len(empty_list)
+        if total_empty:
+            self.stdout.write(
+                f"  filling media URLs for {total_empty:,} empty galleries "
+                f"(AMPRE API only — no image download)..."
+            )
+            self.stdout.flush()
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from django.db import connection
+
+        def _fill(prop: Property) -> int:
             try:
-                written = refresh_property_media_from_ampre(prop)
-            except AmpreClientError as exc:
+                return refresh_property_media_from_ampre(
+                    prop, verify_url=False
+                )
+            except (AmpreClientError, Exception) as exc:
+                # Never let one bad AMPRE Media response abort the full sync.
                 self.stderr.write(
                     self.style.WARNING(
                         f"  media skip {prop.listing_id or prop.listing_key}: {exc}"
                     )
                 )
-                written = 0
-            if written:
-                media_filled += 1
+                return 0
+            finally:
+                connection.close()
+
+        # Parallel URL fetches — bottleneck was serial AMPRE Media calls
+        # plus an optional CDN probe (now disabled).
+        workers = min(12, max(4, total_empty and 12))
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_fill, prop) for prop in empty_list]
+            for fut in as_completed(futures):
+                written = fut.result() or 0
+                if written:
+                    media_filled += 1
+                done += 1
+                if done % 200 == 0 or done == total_empty:
+                    self.stdout.write(
+                        f"  media progress {done:,}/{total_empty:,} "
+                        f"(filled {media_filled:,})"
+                    )
+                    self.stdout.flush()
 
         return created, updated, skipped, media_filled

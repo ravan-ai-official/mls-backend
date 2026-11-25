@@ -1,5 +1,6 @@
 import time
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connections, transaction
@@ -21,6 +22,10 @@ from mls.services.ddf.converters import (
 )
 from mls.services.ddf.mapper import map_property_defaults
 from mls.services.map_aggregates import rebuild_h3_aggregates
+from mls.services.sync_filters import (
+    EXCLUDE_AG_INDUSTRY_CLAUSE,
+    and_filters,
+)
 from mls.snapshot_utils import (
     bulk_record_listing_first_seen,
     bulk_record_property_snapshots,
@@ -39,25 +44,62 @@ _VALID_PROPERTY_FIELDS = {
     if getattr(field, "concrete", False) and not field.many_to_many
 }
 
+_DECIMAL_FIELD_LIMITS = {
+    field.name: (field.max_digits, field.decimal_places)
+    for field in Property._meta.get_fields()
+    if getattr(field, "get_internal_type", lambda: "")() == "DecimalField"
+}
+
+
+def _clamp_decimal(value, max_digits, decimal_places):
+    """Null out values that would overflow the Postgres numeric column."""
+    if value is None:
+        return None
+    try:
+        number = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not number.is_finite():
+        return None
+    quantize_exp = Decimal(10) ** -decimal_places
+    try:
+        number = number.quantize(quantize_exp, rounding=ROUND_DOWN)
+    except InvalidOperation:
+        return None
+    max_abs = (Decimal(10) ** (max_digits - decimal_places)) - quantize_exp
+    if abs(number) > max_abs:
+        return None
+    return number
+
 
 def _safe_property_defaults(raw_data):
     """Map a DDF listing dict to Property kwargs, dropping unknown keys."""
     mapped = map_property_defaults(raw_data)
-    return {k: v for k, v in mapped.items() if k in _VALID_PROPERTY_FIELDS}
+    cleaned = {}
+    for key, value in mapped.items():
+        if key not in _VALID_PROPERTY_FIELDS:
+            continue
+        limits = _DECIMAL_FIELD_LIMITS.get(key)
+        if limits is not None and value is not None:
+            value = _clamp_decimal(value, limits[0], limits[1])
+        cleaned[key] = value
+    return cleaned
 
 
 class Command(BaseCommand):
     """
     Sync DDF listings into the Property table. Append-only.
 
-    This command NEVER deletes Property rows. Every sync either INSERTS
-    new listings or UPDATES existing ones; stale rows are left in place.
-    The only deletions anywhere in this file are on Room / Media child
-    rows inside process_batch, and those are immediately re-created from
-    the fresh DDF payload (refresh semantics, not purge).
+    CREA DDF is Active-only upstream (no Closed/Expired). Within that
+    feed we sync every PropertySubType except Agriculture / Farm /
+    Industrial. This command NEVER deletes Property rows — only insert
+    or update. Room / Media child rows are refresh-replaced per listing.
     """
 
-    help = "Sync DDF listings (full catalogue or N-hour window). Append-only."
+    help = (
+        "Sync DDF listings (Active catalogue; excludes Agriculture / "
+        "Industrial). Append-only."
+    )
 
     INCREMENTAL_OVERLAP_MINUTES = 10
 
@@ -168,9 +210,11 @@ class Command(BaseCommand):
         parser.add_argument(
             "--repair-media",
             action="store_true",
+            default=False,
             help=(
                 "After upsert, probe dead DDF CDN URLs and refresh "
-                "from AMPRE. Off by default — expensive on full sync."
+                "from AMPRE. Off by default — DDF payload Media URLs "
+                "are always saved; probing every CDN link is very slow."
             ),
         )
 
@@ -209,9 +253,9 @@ class Command(BaseCommand):
             minutes=self.INCREMENTAL_OVERLAP_MINUTES
         )
 
-        return (
-            "ModificationTimestamp gt "
-            f"{cutoff.isoformat()}"
+        return and_filters(
+            f"ModificationTimestamp gt {cutoff.isoformat()}",
+            EXCLUDE_AG_INDUSTRY_CLAUSE,
         )
 
     def handle(self, *args, **options):
@@ -266,6 +310,7 @@ class Command(BaseCommand):
                     insert_new_only=options[
                         "insert_new_only"
                     ],
+                    repair_media=options["repair_media"],
                 )
             )
 
@@ -273,22 +318,24 @@ class Command(BaseCommand):
             max_pages = options["max_pages"]
 
             if options["full"]:
-                filter_expression = None
+                filter_expression = EXCLUDE_AG_INDUSTRY_CLAUSE
                 self.stdout.write(
-                    "--full: fetching the entire catalogue "
-                    f"(cap: {max_pages or 'none'} pages)."
+                    "--full: fetching Active catalogue "
+                    "(excludes Agriculture / Industrial; "
+                    f"cap: {max_pages or 'none'} pages)."
                 )
             elif options["window_hours"]:
                 cutoff = timezone.now() - timedelta(
                     hours=options["window_hours"]
                 )
-                filter_expression = (
-                    "ModificationTimestamp gt "
-                    f"{cutoff.isoformat()}"
+                filter_expression = and_filters(
+                    f"ModificationTimestamp gt {cutoff.isoformat()}",
+                    EXCLUDE_AG_INDUSTRY_CLAUSE,
                 )
                 self.stdout.write(
                     f"--window-hours={options['window_hours']}: "
-                    f"fetching listings modified since {cutoff.isoformat()}."
+                    f"fetching listings modified since {cutoff.isoformat()} "
+                    "(excludes Agriculture / Industrial)."
                 )
             else:
                 filter_expression = (
@@ -296,11 +343,12 @@ class Command(BaseCommand):
                 )
 
             if cache_is_empty:
-                # First-ever seed: pull the full catalogue.
-                # Only an explicit --max-pages still bounds it (for testing).
-                filter_expression = None
+                # First-ever seed: pull the full Active catalogue
+                # (still excluding Agriculture / Industrial).
+                filter_expression = EXCLUDE_AG_INDUSTRY_CLAUSE
                 self.stdout.write(
-                    "DDF cache is empty; seeding the full catalogue."
+                    "DDF cache is empty; seeding Active catalogue "
+                    "(excludes Agriculture / Industrial)."
                 )
 
             # STREAMING UPSERT with real DB batching.
@@ -320,12 +368,11 @@ class Command(BaseCommand):
                 progress_callback=self.stdout.write,
             )
 
-            def flush_buffer():
-                nonlocal downloaded_count, buffer
-                if not buffer:
+            def flush_chunk(chunk):
+                """Write chunk; on numeric overflow, bisect until bad rows skip."""
+                nonlocal downloaded_count
+                if not chunk:
                     return
-                chunk = buffer
-                buffer = []
                 try:
                     self.process_batch(
                         chunk,
@@ -338,12 +385,38 @@ class Command(BaseCommand):
                         f"(total {downloaded_count:,})."
                     )
                 except Exception as exc:
+                    msg = str(exc).lower()
+                    if len(chunk) > 1 and (
+                        "numeric" in msg
+                        or "overflow" in msg
+                        or "out of range" in msg
+                        or "duplicate key" in msg
+                        or "unique constraint" in msg
+                    ):
+                        mid = len(chunk) // 2
+                        self.stderr.write(
+                            self.style.WARNING(
+                                f"Batch of {len(chunk):,} hit '{exc}'; "
+                                f"splitting into {mid:,} + {len(chunk) - mid:,}."
+                            )
+                        )
+                        flush_chunk(chunk[:mid])
+                        flush_chunk(chunk[mid:])
+                        return
                     self.stderr.write(
                         self.style.WARNING(
                             f"Batch upsert failed ({len(chunk):,} rows): "
-                            f"{exc}. Continuing."
+                            f"{exc}. Skipping this chunk."
                         )
                     )
+
+            def flush_buffer():
+                nonlocal buffer
+                if not buffer:
+                    return
+                chunk = buffer
+                buffer = []
+                flush_chunk(chunk)
 
             for page in pages_iter:
                 page_count += 1
@@ -407,7 +480,6 @@ class Command(BaseCommand):
                 ampre_kwargs = {
                     "stdout": self.stdout,
                     "stderr": self.stderr,
-                    "skip_media": True,
                 }
                 if options["full"]:
                     ampre_kwargs["full"] = True
@@ -462,6 +534,7 @@ class Command(BaseCommand):
         max_pages,
         batch_size,
         insert_new_only,
+        repair_media=True,
     ):
         """
         Fetch and commit each priority tier before requesting
@@ -482,7 +555,10 @@ class Command(BaseCommand):
         gta_tiers = tuple(
             (
                 f"GTA: {city}",
-                f"City eq '{city}'",
+                and_filters(
+                    f"City eq '{city}'",
+                    EXCLUDE_AG_INDUSTRY_CLAUSE,
+                ),
                 gta_city_page_limit,
             )
             for city in self.GTA_CITIES
@@ -491,7 +567,10 @@ class Command(BaseCommand):
         tiers = gta_tiers + (
             (
                 "remaining Ontario",
-                "StateOrProvince eq 'Ontario'",
+                and_filters(
+                    "StateOrProvince eq 'Ontario'",
+                    EXCLUDE_AG_INDUSTRY_CLAUSE,
+                ),
                 max_pages,
             ),
         )
@@ -570,7 +649,7 @@ class Command(BaseCommand):
                 insert_new_only=(
                     insert_new_only
                 ),
-                repair_media=False,
+                repair_media=repair_media,
             )
 
             self.stdout.write(
@@ -646,6 +725,18 @@ class Command(BaseCommand):
         repair_media=False,
     ):
         """Upsert one batch. NEVER deletes Property rows."""
+        # Dedupe ListingKey within the batch — DDF pages can repeat a
+        # key, and parallel AMPRE sync may also insert the same key.
+        seen_keys: set[str] = set()
+        unique_batch = []
+        for data in batch:
+            key = data.get("ListingKey")
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            unique_batch.append(data)
+        batch = unique_batch
+
         listing_keys = [
             data["ListingKey"]
             for data in batch
@@ -685,6 +776,18 @@ class Command(BaseCommand):
                 continue
 
             defaults = _safe_property_defaults(data)
+
+            # Belt-and-suspenders: never persist Ag / Industrial even if
+            # an upstream page slips past the OData filter.
+            subtype = (
+                defaults.get("property_sub_type") or ""
+            ).strip().lower()
+            if subtype in {
+                "agriculture",
+                "farm",
+                "industrial",
+            }:
+                continue
 
             first_seen_rows.append(
                 (
@@ -824,9 +927,12 @@ class Command(BaseCommand):
             )
 
         if property_objs:
+            # ignore_conflicts: if AMPRE inserted the same listing_key
+            # between our SELECT and INSERT, skip the insert; the next
+            # sync pass will update the row.
             Property.objects.bulk_create(
                 property_objs,
-                ignore_conflicts=False,
+                ignore_conflicts=True,
             )
 
         if properties_to_update:
