@@ -64,7 +64,10 @@ WOWA_PASSES: List[Tuple[float, Optional[int], int, float, bool, int]] = [
 ]
 
 AMPRE_CACHE_SECONDS = 60 * 60
-AMPRE_MAX_ROWS = 800
+# One AMPRE page is enough to rank nearby sold comps; 800-row pulls routinely
+# blew past the browser/proxy timeout on home-evaluation.
+AMPRE_MAX_ROWS = 200
+AMPRE_REQUEST_TIMEOUT_SECONDS = 12
 PRICING_K = 8
 ACTIVE_K = 5
 
@@ -227,8 +230,9 @@ def _fetch_ampre_sold_rows(city: str, max_age_days: int, subtype: Optional[str])
             filter_expression=expression,
             select_fields=AMPRE_SOLD_SELECT,
             orderby="CloseDate desc",
-            top=1000,
+            top=AMPRE_MAX_ROWS,
             max_rows=AMPRE_MAX_ROWS,
+            timeout=AMPRE_REQUEST_TIMEOUT_SECONDS,
         )
     except AmpreClientError as exc:
         logger.warning("AMPRE sold comps failed for %s: %s", city, exc)

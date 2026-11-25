@@ -2112,6 +2112,15 @@ class PropertyDetailView(APIView):
         except Exception:
             pass
 
+        # Many feed rows ship without lat/lng. Valuation already geocodes those;
+        # do the same here so Schools / Climate / map tabs see a location.
+        try:
+            from mls.services.valuation.geocode import ensure_property_coordinates
+
+            ensure_property_coordinates(property_obj)
+        except Exception:
+            pass
+
         serializer = PropertyDetailSerializer(
             property_obj,
             context={"request": request},
