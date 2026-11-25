@@ -58,6 +58,7 @@ def fetch_property_page(
     orderby: str | None = None,
     top: int = 500,
     max_rows: int | None = None,
+    timeout: float | None = None,
     progress_callback=None,
 ) -> list[dict[str, Any]]:
     """Fetch AMPRE Property rows and return the combined ``value`` arrays.
@@ -69,6 +70,7 @@ def fetch_property_page(
     """
     requested_top = min(int(top or 500), 1000)
     row_budget = max(int(max_rows), 1) if max_rows else requested_top
+    request_timeout = DEFAULT_TIMEOUT_SECONDS if timeout is None else float(timeout)
     params: dict[str, Any] = {"$top": requested_top}
     if filter_expression:
         params["$filter"] = filter_expression
@@ -101,7 +103,7 @@ def fetch_property_page(
             response = requests.get(
                 url,
                 headers=_headers(),
-                timeout=DEFAULT_TIMEOUT_SECONDS,
+                timeout=request_timeout,
             )
             response.raise_for_status()
         except requests.RequestException as exc:

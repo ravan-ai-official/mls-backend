@@ -44,6 +44,7 @@ from .views_precon import (
     PreComDocumentProxyAPIView,
     PreComPropertyRecommendationsAPIView,
     PreComPropertyListAPIView,
+    PreComDealsAPIView,
 )
 from .views_search import SearchSuggestAPIView
 from .views_featured_studio import StudioFeaturedAPIView
@@ -124,6 +125,8 @@ urlpatterns = [
     path('studio/submissions/<int:pk>/decision/', StudioSubmissionDecisionAPIView.as_view(), name='studio-submission-decision'),
     path('studio/submissions/<int:pk>/precon/', StudioSubmissionLinkAPIView.as_view(), name='studio-submission-link'),
     path('precon-properties/bulk-upload/', PreComPropertyBulkUploadAPIView.as_view(), name='precon-property-bulk-upload'),
+    # Before <pk> so "deals" is not parsed as an integer id.
+    path('precon-properties/deals/', PreComDealsAPIView.as_view(), name='precon-property-deals'),
     path('precon-properties/<int:pk>/floor-plan-intent/', PreComFloorPlanIntentAPIView.as_view(), name='precon-floor-plan-intent'),
     path('precon-properties/<int:pk>/document-intent/', PreComDocumentIntentAPIView.as_view(), name='precon-document-intent'),
     path('precon-properties/document-proxy/', PreComDocumentProxyAPIView.as_view(), name='precon-document-proxy'),

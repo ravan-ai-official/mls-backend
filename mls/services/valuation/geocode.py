@@ -1,13 +1,16 @@
-"""Nominatim geocode helper for valuation when a listing has no lat/lng."""
+"""Nominatim geocode helper when a listing has no lat/lng."""
 
 from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import requests
 from django.core.cache import cache
+
+if TYPE_CHECKING:
+    from mls.models import Property
 
 logger = logging.getLogger(__name__)
 
@@ -100,3 +103,32 @@ def geocode_address(
         if lat is not None and lng is not None:
             return lat, lng
     return None, None
+
+
+def ensure_property_coordinates(p: "Property") -> tuple[Optional[float], Optional[float]]:
+    """Return stored coords, or geocode + persist so detail/schools/valuation share one location.
+
+    Property detail and the schools tab read ``latitude``/``longitude`` from the
+    listing payload. Valuation used to geocode on the side, so Network could show
+    coords on an estimate request while the property page still said location was
+    missing. Filling here keeps those surfaces aligned.
+    """
+    lat = float(p.latitude) if p.latitude is not None else None
+    lng = float(p.longitude) if p.longitude is not None else None
+    if lat is not None and lng is not None:
+        return lat, lng
+
+    geo_lat, geo_lng = geocode_address(
+        p.unparsed_address or "",
+        city=p.city or "",
+        postal_code=p.postal_code or "",
+    )
+    if geo_lat is None or geo_lng is None:
+        return None, None
+
+    from mls.models import Property
+
+    Property.objects.filter(pk=p.pk).update(latitude=geo_lat, longitude=geo_lng)
+    p.latitude = geo_lat
+    p.longitude = geo_lng
+    return geo_lat, geo_lng

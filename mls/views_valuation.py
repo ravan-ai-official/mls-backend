@@ -60,29 +60,9 @@ def _float_or_none(v: Any) -> Optional[float]:
         return None
 
 
-def _ensure_property_coordinates(p: Property) -> tuple[Optional[float], Optional[float]]:
-    """Use stored coords, or geocode + persist so valuation can find comps."""
-    lat = float(p.latitude) if p.latitude is not None else None
-    lng = float(p.longitude) if p.longitude is not None else None
-    if lat is not None and lng is not None:
-        return lat, lng
-
-    from mls.services.valuation.geocode import geocode_address
-
-    geo_lat, geo_lng = geocode_address(
-        p.unparsed_address or "",
-        city=p.city or "",
-        postal_code=p.postal_code or "",
-    )
-    if geo_lat is None or geo_lng is None:
-        return None, None
-    Property.objects.filter(pk=p.pk).update(latitude=geo_lat, longitude=geo_lng)
-    p.latitude = geo_lat
-    p.longitude = geo_lng
-    return geo_lat, geo_lng
-
-
 def _property_to_lookup_payload(p: Property) -> Dict[str, Any]:
+    from mls.services.valuation.geocode import ensure_property_coordinates
+
     depth = infer_lot_depth(
         p.lot_size_dimensions,
         p.lot_size_area,
@@ -91,7 +71,7 @@ def _property_to_lookup_payload(p: Property) -> Dict[str, Any]:
     depth_alt = parse_lot_depth_from_dimensions(p.lot_size_dimensions)
     if depth is None and depth_alt is not None:
         depth = depth_alt
-    lat, lng = _ensure_property_coordinates(p)
+    lat, lng = ensure_property_coordinates(p)
     return {
         "listing_key": p.listing_key,
         "unparsed_address": p.unparsed_address or "",
@@ -199,6 +179,18 @@ class ValuationEstimateAPIView(APIView):
         except Exception:
             return Response({"detail": "Invalid JSON"}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            return self._estimate(request, body)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("valuation estimate failed")
+            return Response(
+                {"detail": "Estimate failed. Please try again in a moment."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def _estimate(self, request, body: Dict[str, Any]):
         listing_key = (body.get("listing_key") or "").strip() or None
         prop = (
             Property.objects.filter(listing_key=listing_key).prefetch_related("rooms").first()

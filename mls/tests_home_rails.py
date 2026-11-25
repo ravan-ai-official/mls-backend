@@ -10,6 +10,7 @@ from .models import Content, PreComProperty, Property
 
 FEATURED_URL = "/api/mls/properties/featured-properties/"
 PRECON_URL = "/api/mls/precon-properties/"
+PRECON_DEALS_URL = "/api/mls/precon-properties/deals/"
 
 
 def _listing(key, *, days_old=1, status="Active", remarks="", **extra):
@@ -440,3 +441,122 @@ class PreconSearchHistoryFilterTests(TestCase):
         self.assertIn(12, unfiltered)
         self.assertIn(11, unfiltered)
         self.assertIn(10, unfiltered)
+
+
+class PreconDealsRailTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        now = timezone.now()
+
+        def project(wp_id, *, title, address="", **extra):
+            content = Content.objects.create(
+                wp_id=wp_id,
+                content_type=Content.PROPERTY,
+                title=title,
+                slug=f"deals-{wp_id}",
+                status=Content.PUBLISH,
+                published_at=now - timedelta(days=wp_id),
+            )
+            row, _ = PreComProperty.objects.update_or_create(
+                content=content,
+                defaults={
+                    "address": address,
+                    "sales_stage": PreComProperty.SALES_STAGE_NOW_SELLING,
+                    **extra,
+                },
+            )
+            return row
+
+        self.pin = project(
+            20,
+            title="Pinned Towers",
+            address="1 King St, Toronto ON",
+            is_featured=True,
+            featured_order=1,
+            bedrooms=2,
+            price=800000,
+        )
+        self.sold_pin = project(
+            21,
+            title="Sold Out Pin",
+            address="2 King St, Toronto ON",
+            is_featured=True,
+            featured_order=2,
+            sales_stage=PreComProperty.SALES_STAGE_SOLD_OUT,
+        )
+        self.oak = project(
+            22,
+            title="Oakville Lakes",
+            address="10 Lakeshore, Oakville ON",
+            bedrooms=3,
+            price=900000,
+        )
+        self.miss = project(
+            23,
+            title="Mississauga Square",
+            address="100 City Centre, Mississauga ON",
+            bedrooms=1,
+            price=500000,
+        )
+        self.other = project(
+            24,
+            title="Hamilton Heights",
+            address="50 Main St, Hamilton ON",
+            bedrooms=2,
+            price=600000,
+        )
+
+    def deals(self, **params):
+        headers = {}
+        if "HTTP_CF_IPCITY" in params:
+            headers["HTTP_CF_IPCITY"] = params.pop("HTTP_CF_IPCITY")
+        response = self.client.get(PRECON_DEALS_URL, params, **headers)
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_pinned_first_skips_sold_out_then_newest_fill(self):
+        body = self.deals(limit=3)
+        pairs = [(r["wp_id"], r["deal_source"]) for r in body["results"]]
+        self.assertEqual(pairs[0], (20, "pinned"))
+        self.assertNotIn(21, [wp for wp, _ in pairs])
+        self.assertEqual(body["pinned_count"], 1)
+        self.assertFalse(body["has_search_history"])
+        # Remaining slots are newest fill (higher wp_id published earlier → lower wp_id newer).
+        self.assertEqual({src for _, src in pairs[1:]}, {"newest"})
+
+    def test_fill_false_returns_only_pins(self):
+        body = self.deals(limit=6, fill="false")
+        self.assertEqual([(r["wp_id"], r["deal_source"]) for r in body["results"]], [(20, "pinned")])
+        self.assertEqual(body["newest_count"], 0)
+
+    def test_ip_city_fills_local_when_no_search_history(self):
+        body = self.deals(limit=3, HTTP_CF_IPCITY="Mississauga")
+        pairs = [(r["wp_id"], r["deal_source"]) for r in body["results"]]
+        self.assertEqual(pairs[0], (20, "pinned"))
+        self.assertIn((23, "local"), pairs)
+        self.assertFalse(body["has_search_history"])
+        self.assertEqual(body["local_count"], 1)
+        self.assertEqual(body["cities"], ["Mississauga"])
+
+    def test_search_history_filters_and_tags_history(self):
+        body = self.deals(limit=4, cities="Oakville", beds_min=2)
+        pairs = [(r["wp_id"], r["deal_source"]) for r in body["results"]]
+        self.assertEqual(pairs[0], (20, "pinned"))
+        self.assertIn((22, "history"), pairs)
+        self.assertNotIn(23, [wp for wp, _ in pairs])  # 1 bed Mississauga
+        self.assertTrue(body["has_search_history"])
+        self.assertEqual(body["history_count"], 1)
+        self.assertEqual(body["cities"], ["Oakville"])
+
+    def test_browse_list_still_ignores_ip_alone(self):
+        """Catalog endpoint must not gain IP filtering from the deals rail."""
+        unfiltered = {
+            r["wp_id"]
+            for r in self.client.get(PRECON_URL, {"ordering": "featured"}).json()["results"]
+        }
+        with_ip = self.client.get(
+            PRECON_URL,
+            {"ordering": "featured"},
+            HTTP_CF_IPCITY="Oakville",
+        ).json()
+        self.assertEqual({r["wp_id"] for r in with_ip["results"]}, unfiltered)
