@@ -479,6 +479,40 @@ def _precon_place_q(cities: list[str]) -> Q:
     return place_q
 
 
+class PreComDealsAPIView(APIView):
+    """Homepage Pre-Construction Deals rail.
+
+    GET /api/mls/precon-properties/deals/
+
+    Order: team pins (published, not sold out) → search-history matches
+    (cities + beds/baths/price) or near-visitor IP city → newest fill.
+    ``deal_source``: pinned | history | local | newest.
+    """
+
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Pre-construction"],
+        summary="Homepage pre-construction deals rail",
+        auth=[],
+    )
+    def get(self, request):
+        from mls.services.precon_deals import (
+            PRECON_DEALS_DEFAULT_LIMIT,
+            build_precon_deals,
+        )
+
+        try:
+            limit = max(
+                1,
+                min(int(request.query_params.get("limit", PRECON_DEALS_DEFAULT_LIMIT)), 12),
+            )
+        except (TypeError, ValueError):
+            return Response({"error": "limit must be an integer."}, status=status.HTTP_400_BAD_REQUEST)
+        fill = str(request.query_params.get("fill", "true")).lower() not in {"0", "false", "no"}
+        return Response(build_precon_deals(request, limit=limit, fill=fill))
+
+
 class PreComPropertyListAPIView(ListAPIView):
     """Paginated list of pre-construction properties.
 
