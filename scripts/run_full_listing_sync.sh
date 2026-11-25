@@ -38,9 +38,9 @@ if [ "$DDF_EXIT" != "0" ]; then
 fi
 echo "    DDF full sync OK"
 
-echo "==> 2/2 AMPRE full catalogue (Closed / De-listed)"
+echo "==> 2/2 AMPRE full catalogue (Closed / De-listed) including media"
 sudo docker compose -f "$COMPOSE_FILE" run -d --name "$AMPRE_NAME" backend \
-  python manage.py sync_ampre_closed --full --skip-media
+  python manage.py sync_ampre_closed --full
 
 echo "    follow: sudo docker logs -f $AMPRE_NAME"
 echo "    waiting for AMPRE container to exit..."

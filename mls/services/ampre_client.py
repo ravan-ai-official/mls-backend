@@ -58,6 +58,7 @@ def fetch_property_page(
     orderby: str | None = None,
     top: int = 500,
     max_rows: int | None = None,
+    progress_callback=None,
 ) -> list[dict[str, Any]]:
     """Fetch AMPRE Property rows and return the combined ``value`` arrays.
 
@@ -108,9 +109,16 @@ def fetch_property_page(
             raise AmpreClientError(str(exc)) from exc
 
         data = response.json() or {}
-        all_rows.extend(data.get("value") or [])
+        page_rows = data.get("value") or []
+        all_rows.extend(page_rows)
         url = data.get("@odata.nextLink")
         pages += 1
+
+        if progress_callback:
+            progress_callback(
+                f"  fetched page {pages}: +{len(page_rows):,} "
+                f"(total {len(all_rows):,})"
+            )
 
         # Stop at the caller's budget. AMPRE returns a nextLink on every page,
         # so without this the loop always ran to MAX_PAGES_SAFETY: a top=3
@@ -164,11 +172,12 @@ def fetch_media_page(
                 timeout=DEFAULT_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
-        except requests.RequestException as exc:
+            data = response.json() or {}
+        except (requests.RequestException, ValueError) as exc:
+            # ValueError covers JSONDecodeError from truncated AMPRE bodies.
             logger.warning("AMPRE Media fetch failed: %s", exc)
             raise AmpreClientError(str(exc)) from exc
 
-        data = response.json() or {}
         all_rows.extend(data.get("value") or [])
         url = data.get("@odata.nextLink")
         pages += 1

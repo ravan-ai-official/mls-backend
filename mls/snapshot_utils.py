@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 
 from django.utils import timezone
 
@@ -15,8 +15,8 @@ def _aware_utc(value):
         return None
     if isinstance(value, datetime):
         if timezone.is_naive(value):
-            return timezone.make_aware(value, timezone.utc)
-        return value.astimezone(timezone.utc)
+            return timezone.make_aware(value, dt_timezone.utc)
+        return value.astimezone(dt_timezone.utc)
     return value
 
 

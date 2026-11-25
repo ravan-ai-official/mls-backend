@@ -155,7 +155,17 @@ def fetch_ampre_photos_for_listing_id(listing_id: str) -> list[dict[str, Any]]:
     return dedupe_ampre_photos(raw)
 
 
-def refresh_property_media_from_ampre(prop: Property) -> int:
+def refresh_property_media_from_ampre(
+    prop: Property,
+    *,
+    verify_url: bool = False,
+) -> int:
+    """Fetch AMPRE Media rows and persist ``MediaURL`` strings only.
+
+    Does **not** download image bytes. ``verify_url`` (off by default)
+    optionally HEAD/GETs the first photo; that probe makes bulk sync
+    orders of magnitude slower and is skipped for catalogue imports.
+    """
     keys = _trreb_keys_for(prop)
     if not keys:
         return 0
@@ -168,7 +178,7 @@ def refresh_property_media_from_ampre(prop: Property) -> int:
             break
     if not photos:
         return 0
-    if not url_ok(photos[0]["MediaURL"]):
+    if verify_url and not url_ok(photos[0]["MediaURL"]):
         logger.warning(
             "AMPRE media for %s failed health check; leaving existing rows",
             used_key,

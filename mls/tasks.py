@@ -57,6 +57,5 @@ def sync_ampre_inactive_listings() -> dict:
         "sync_ampre_closed",
         window_hours=24,
         max_rows_per_city=5000,
-        skip_media=True,
     )
     return {"ok": True}
