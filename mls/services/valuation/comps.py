@@ -1,11 +1,13 @@
 """
 Comparable selection for hybrid CMA (WOWA-style).
 
-Priority for pricing comps:
+Sold comparison table (``select_comps``):
   1. AMPRE closed sales with real ClosePrice
-  2. PropertySoldProxy last-ask (last resort)
-Active listings are collected separately as a DOM / asking-price signal and
-are not mixed into the hedonic point when enough real sold comps exist.
+  2. PropertySoldProxy last-ask (fallback)
+
+Active for-sale suggestions (``select_active_comps``) are separate — never
+shown as sold comps. Hedonic pricing may still use actives via
+``pricing_comps`` when sold coverage is thin.
 """
 from __future__ import annotations
 
@@ -518,7 +520,7 @@ def _select_sold_proxy(subject: Dict[str, Any], k: int = PRICING_K) -> List[Dict
 
 
 def select_active_comps(subject: Dict[str, Any], k: int = ACTIVE_K) -> List[Dict[str, Any]]:
-    """Active listings near the subject — DOM / asking-price ceiling signal."""
+    """Active for-sale listings near the subject — suggestion cards, not sold comps."""
     lat = subject.get("latitude")
     lng = subject.get("longitude")
     if lat is None or lng is None:
@@ -533,12 +535,16 @@ def select_active_comps(subject: Dict[str, Any], k: int = ACTIVE_K) -> List[Dict
     sub_type = _norm_subtype(subject.get("property_sub_type"))
     radius = 5.0
 
-    pqs = Property.objects.filter(
-        standard_status__iexact="Active",
-        list_price__isnull=False,
-        list_price__gt=0,
-        latitude__isnull=False,
-        longitude__isnull=False,
+    pqs = (
+        Property.objects.filter(
+            standard_status__iexact="Active",
+            list_price__isnull=False,
+            list_price__gt=0,
+            latitude__isnull=False,
+            longitude__isnull=False,
+        )
+        # Sale suggestions only — never rentals.
+        .exclude(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
     )
     if sub_type:
         pqs = pqs.filter(property_sub_type__icontains=sub_type[:30])
@@ -603,7 +609,11 @@ def select_comps(
     max_age_days: int = 180,
     k: int = PRICING_K,
 ) -> List[Dict[str, Any]]:
-    """Pricing comps: AMPRE ClosePrice first, sold_proxy, then active listings.
+    """Sold comparables only: AMPRE ClosePrice first, then sold_proxy.
+
+    Active for-sale listings belong in ``select_active_comps`` (suggestion
+    cards), never in the sold-comparison table. Hedonic pricing can still use
+    active listings via ``pricing_comps(..., active_comps)`` when solds are thin.
 
     ``radius_km`` / ``max_age_days`` are retained for call-site compatibility;
     WOWA progressive passes own the real thresholds.
@@ -622,21 +632,6 @@ def select_comps(
         if key:
             existing.add(key)
         if len(sold) >= k:
-            break
-
-    if len(sold) >= 3:
-        sold.sort(key=lambda c: c.get("distance_km") or 99)
-        return sold[:k]
-
-    # Last resort: active asking prices so the wizard still returns a range.
-    for active in select_active_comps(subject, k=k):
-        key = active.get("listing_key")
-        if key and key in existing:
-            continue
-        sold.append(active)
-        if key:
-            existing.add(key)
-        if len(sold) >= max(3, k // 2):
             break
 
     sold.sort(key=lambda c: c.get("distance_km") or 99)

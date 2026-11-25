@@ -322,7 +322,12 @@ class ValuationEstimateAPIView(APIView):
             if not subject["last_sold_date"] and prop.close_date:
                 subject["last_sold_date"] = prop.close_date.isoformat()
 
-        comps = select_comps(subject)
+        # Sold comps for the comparison table; active for-sale for suggestions.
+        comps = [
+            c
+            for c in select_comps(subject)
+            if c.get("source") in {"sold", "sold_proxy"}
+        ]
         active_comps = select_active_comps(subject)
         hed_comps = pricing_comps(comps, active_comps)
         if not hed_comps:
@@ -387,14 +392,32 @@ class ValuationEstimateAPIView(APIView):
         all_comp_rows = comps + [
             a for a in active_comps if a.get("listing_key") not in {c.get("listing_key") for c in comps}
         ]
+        listing_keys = [c.get("listing_key") for c in all_comp_rows if c.get("listing_key")]
         comp_props = {
             p.listing_key: p
-            for p in Property.objects.filter(
-                listing_key__in=[c.get("listing_key") for c in all_comp_rows if c.get("listing_key")]
-            ).prefetch_related("rooms")
+            for p in Property.objects.filter(listing_key__in=listing_keys).prefetch_related(
+                "rooms", "media"
+            )
         }
 
-        def _comp_out(c: Dict[str, Any]) -> Dict[str, Any]:
+        # Primary photo per listing for for-sale suggestion cards.
+        photo_by_key: Dict[str, str] = {}
+        for key, prop_row in comp_props.items():
+            media = next(
+                (
+                    item
+                    for item in sorted(
+                        prop_row.media.all(),
+                        key=lambda m: (0 if getattr(m, "is_preferred", False) else 1, getattr(m, "order", 0) or 0),
+                    )
+                    if (getattr(item, "media_url", None) or "").strip()
+                ),
+                None,
+            )
+            if media:
+                photo_by_key[key] = (media.media_url or "").strip()
+
+        def _comp_out(c: Dict[str, Any], *, include_photo: bool = False) -> Dict[str, Any]:
             details = property_details(comp_props.get(c.get("listing_key")))
             # Enrich from AMPRE/proxy fields when the local catalogue row is gone.
             if not details.get("address") and c.get("unparsed_address"):
@@ -413,7 +436,7 @@ class ValuationEstimateAPIView(APIView):
                 details["year_built"] = c.get("year_built")
             if details.get("floor_area_sqft") is None and c.get("living_area") is not None:
                 details["floor_area_sqft"] = c.get("living_area")
-            return {
+            payload = {
                 "listing_key": c.get("listing_key"),
                 "price": c.get("price"),
                 "close_price": c.get("close_price"),
@@ -429,9 +452,14 @@ class ValuationEstimateAPIView(APIView):
                 "days_on_market": c.get("days_on_market"),
                 "details": details,
             }
+            if include_photo:
+                key = c.get("listing_key") or ""
+                payload["image_url"] = photo_by_key.get(key) or None
+            return payload
 
+        # Comparison table: sold / sold_proxy only. Suggestions: active for-sale + photo.
         comps_out = [_comp_out(c) for c in comps]
-        active_out = [_comp_out(c) for c in active_comps]
+        active_out = [_comp_out(c, include_photo=True) for c in active_comps]
 
         breakdown = list(hed.get("breakdown") or [])
         for adj in ai.get("adjustments") or []:
