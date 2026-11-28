@@ -124,6 +124,19 @@ class FeaturedPropertiesTests(TestCase):
         hist_keys = [r["listing_key"] for r in body["results"] if r["featured_source"] == "history"]
         self.assertEqual(hist_keys[:2], ["hist-b", "hist-a"])
 
+    def test_baths_min_history_param_does_not_500(self):
+        # Regression: dict(QueryDict) left baths_min as ['2'] → int() TypeError.
+        _listing("pin", is_featured=True, featured_order=1, bathrooms_total_integer=3)
+        _listing("hist-2bath", bathrooms_total_integer=2, list_price=500000, days_old=1)
+        _listing("hist-1bath", bathrooms_total_integer=1, list_price=400000, days_old=1)
+        response = self.client.get(FEATURED_URL, {"limit": 48, "baths_min": 2})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["has_search_history"])
+        keys = {r["listing_key"] for r in body["results"]}
+        self.assertIn("hist-2bath", keys)
+        self.assertNotIn("hist-1bath", keys)
+
     def test_pinned_rental_is_excluded(self):
         _listing("rent-pin", is_featured=True, featured_order=1, lease_amount=2800)
         _listing("sale-pin", is_featured=True, featured_order=2)
