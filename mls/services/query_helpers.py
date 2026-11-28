@@ -18,6 +18,8 @@ MAP_FILTER_KEYS = {
     "province",
     "postal_code",
     "property_type",
+    "property_type_group",
+    "building_type",
     "structure_type",
     "common_interest",
     "property_attached_yn",
@@ -36,7 +38,71 @@ MAP_FILTER_KEYS = {
     "lot_size_min",
     "lot_size_max",
     "community_slug",
-    
+    "stories_min",
+    "stories_max",
+    "year_built_min",
+    "year_built_max",
+    "association_fee_min",
+    "association_fee_max",
+    "tax_min",
+    "tax_max",
+    "listed_since",
+    "open_house",
+    "sold_within_days",
+    "garages_min",
+    "basement",
+}
+
+# REALTOR.ca Property Type group → TREB PropertySubType / keyword filters.
+PROPERTY_TYPE_GROUP_FILTERS: dict[str, Q] = {
+    "residential": (
+        Q(property_sub_type__icontains="Detached")
+        | Q(property_sub_type__icontains="Semi")
+        | Q(property_sub_type__icontains="Town")
+        | Q(property_sub_type__icontains="Att/Row")
+        | Q(property_sub_type__icontains="Link")
+        | Q(property_sub_type__icontains="Rural")
+    ),
+    "condo": (
+        Q(property_sub_type__icontains="Condo")
+        | Q(property_sub_type__icontains="Co-Op")
+        | Q(property_sub_type__icontains="Coop")
+        | Q(common_interest__icontains="Condo")
+    ),
+    "vacant_land": (
+        Q(property_sub_type__icontains="Vacant")
+        | Q(property_sub_type__icontains="Land")
+        | Q(property_sub_type__icontains="Lot")
+    ),
+    "recreational": (
+        Q(property_sub_type__icontains="Recreational")
+        | Q(property_sub_type__icontains="Cottage")
+        | Q(property_sub_type__icontains="Seasonal")
+    ),
+    "multi_family": (
+        Q(property_sub_type__icontains="Multiplex")
+        | Q(property_sub_type__icontains="Duplex")
+        | Q(property_sub_type__icontains="Triplex")
+        | Q(property_sub_type__icontains="Fourplex")
+        | Q(property_sub_type__icontains="Multi")
+    ),
+    "agriculture": (
+        Q(property_sub_type__icontains="Farm")
+        | Q(property_sub_type__icontains="Agriculture")
+    ),
+    "parking": (
+        Q(property_sub_type__icontains="Parking")
+        | Q(property_sub_type__icontains="Locker")
+    ),
+}
+
+BUILDING_TYPE_TO_SUBTYPES: dict[str, list[str]] = {
+    "House": ["Detached", "Semi-Detached", "Semi Detached"],
+    "Row / Townhouse": ["Att/Row/Twnhouse", "Townhouse", "Townhome", "Row/Townhouse"],
+    "Apartment": ["Condo Apt", "Condo Apartment", "Apartment", "Condo"],
+    "Duplex": ["Duplex"],
+    "Triplex": ["Triplex"],
+    "Fourplex": ["Fourplex", "Multiplex"],
 }
 
 SEARCH_TEXT_FIELDS = [
@@ -346,20 +412,44 @@ def _apply_common_filters(
         qs = qs.filter(**{f"{price_field}__gte": float(params.get("price_min"))})
     if params.get("price_max"):
         qs = qs.filter(**{f"{price_field}__lte": float(params.get("price_max"))})
-    if params.get("transaction_type") == "rent":
+    txn = (params.get("transaction_type") or "").strip().lower()
+    if txn == "rent":
         qs = qs.filter(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
-    elif params.get("transaction_type") == "sale":
+    elif txn in {"sale", "sold"}:
         qs = qs.filter(lease_amount__isnull=True, total_actual_rent__isnull=True)
     if params.get("has_lease") in ("true", "1", "True"):
         qs = qs.filter(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
+    # REALTOR.ca Sold control → closed statuses when no explicit status_group.
+    effective_status_group = params.get("status_group")
+    if txn == "sold" and not effective_status_group:
+        effective_status_group = "sold"
     if params.get("bedrooms"):
         qs = qs.filter(bedrooms_total__gte=int(params.get("bedrooms")))
     if params.get("bathrooms"):
         qs = qs.filter(bathrooms_total_integer__gte=int(params.get("bathrooms")))
+    if params.get("property_type_group"):
+        group_q = PROPERTY_TYPE_GROUP_FILTERS.get(
+            str(params.get("property_type_group")).strip().lower()
+        )
+        if group_q is not None:
+            qs = qs.filter(group_q)
+    if params.get("building_type"):
+        building = str(params.get("building_type")).strip()
+        subtypes = BUILDING_TYPE_TO_SUBTYPES.get(building)
+        if subtypes:
+            type_q = Q()
+            for subtype in subtypes:
+                type_q |= Q(property_sub_type__icontains=subtype)
+            qs = qs.filter(type_q)
     if params.get("property_type"):
         types = _split_csv(params.get("property_type", ""))
         if types:
-            qs = qs.filter(property_sub_type__in=types)
+            type_q = Q()
+            for item in types:
+                type_q |= Q(property_sub_type__iexact=item) | Q(
+                    property_sub_type__icontains=item
+                )
+            qs = qs.filter(type_q)
     if params.get("structure_type"):
         structure_types = _split_csv(params.get("structure_type", ""))
         if structure_types:
@@ -404,20 +494,65 @@ def _apply_common_filters(
             lng_float__gte=float(params.get("longitude_min")),
             lng_float__lte=float(params.get("longitude_max")),
         )
-    if params.get("building_area_min"):
-        qs = qs.filter(building_area_total__gte=float(params.get("building_area_min")))
-    if params.get("building_area_max"):
-        qs = qs.filter(building_area_total__lte=float(params.get("building_area_max")))
+    # Square footage uses effective living area (above-grade → living → building).
+    if params.get("building_area_min") or params.get("building_area_max"):
+        qs = with_effective_sqft(qs)
+        if params.get("building_area_min"):
+            qs = qs.filter(effective_sqft__gte=float(params.get("building_area_min")))
+        if params.get("building_area_max"):
+            qs = qs.filter(effective_sqft__lte=float(params.get("building_area_max")))
     if params.get("lot_size_min"):
         qs = qs.filter(lot_size_area__gte=float(params.get("lot_size_min")))
     if params.get("lot_size_max"):
         qs = qs.filter(lot_size_area__lte=float(params.get("lot_size_max")))
     if params.get("year_built_min"):
         qs = qs.filter(year_built__gte=int(params.get("year_built_min")))
+    if params.get("year_built_max"):
+        qs = qs.filter(year_built__lte=int(params.get("year_built_max")))
+    if params.get("association_fee_min"):
+        qs = qs.filter(association_fee__gte=float(params.get("association_fee_min")))
+    if params.get("association_fee_max"):
+        qs = qs.filter(association_fee__lte=float(params.get("association_fee_max")))
+    if params.get("tax_min"):
+        qs = qs.filter(tax_annual_amount__gte=float(params.get("tax_min")))
+    if params.get("tax_max"):
+        qs = qs.filter(tax_annual_amount__lte=float(params.get("tax_max")))
+    if params.get("listed_since"):
+        # Accept YYYY-MM-DD (preferred) or mm/dd/yyyy from REALTOR.ca UI.
+        raw = str(params.get("listed_since")).strip()
+        from django.utils.dateparse import parse_date
+
+        parsed = parse_date(raw)
+        if parsed is None and "/" in raw:
+            try:
+                month, day, year = raw.split("/")
+                parsed = parse_date(f"{year}-{month.zfill(2)}-{day.zfill(2)}")
+            except ValueError:
+                parsed = None
+        if parsed is not None:
+            qs = qs.filter(
+                Q(original_entry_timestamp__date__gte=parsed)
+                | Q(modification_timestamp__date__gte=parsed)
+            )
+    if params.get("open_house") in ("1", "true", "True", "yes"):
+        qs = qs.filter(open_houses__date__gte=timezone.localdate()).distinct()
+    if params.get("sold_within_days") and (
+        txn == "sold" or "sold" in (params.get("status_group") or "").lower()
+    ):
+        days = int(params.get("sold_within_days"))
+        qs = qs.filter(close_date__gte=(timezone.localdate() - timedelta(days=days)))
     if params.get("keywords"):
         kw_q = Q()
         for kw in _split_csv(params.get("keywords", "")):
-            kw_q |= Q(public_remarks__icontains=kw)
+            kw_q |= (
+                Q(public_remarks__icontains=kw)
+                | Q(unparsed_address__icontains=kw)
+                | Q(appliances__icontains=kw)
+                | Q(parking_features__icontains=kw)
+                | Q(lot_features__icontains=kw)
+                | Q(interior_features__icontains=kw)
+                | Q(property_features__icontains=kw)
+            )
         qs = qs.filter(kw_q)
     if params.get("has_photos") in ("true", "1", "True"):
         qs = qs.filter(photos_count__gt=0)
@@ -425,7 +560,13 @@ def _apply_common_filters(
         days = int(params.get("new_listings_days"))
         cutoff = timezone.now() - timedelta(days=days)
         qs = qs.filter(modification_timestamp__gte=cutoff)
-    qs = _apply_status_filters(qs, params, allow_delisted=allow_delisted)
+    status_params = params
+    if effective_status_group and not params.get("status_group"):
+        # Avoid mutating QueryDict; pass a thin overlay for status only.
+        status_params = {**{k: params.get(k) for k in ("status", "standard_status")}, "status_group": effective_status_group}
+    elif effective_status_group:
+        status_params = params
+    qs = _apply_status_filters(qs, status_params, allow_delisted=allow_delisted)
     if params.get("modified_within_days"):
         days = int(params.get("modified_within_days"))
         qs = qs.filter(modification_timestamp__gte=timezone.now() - timedelta(days=days))
@@ -456,9 +597,13 @@ def apply_structure_filters(qs, params):
             # (EstateProperty has a separate `garages` field).
             qs = qs.filter(parking_total__gte=int(params.get("garages_min")))
         if params.get("stories_min"):
-            qs = qs.filter(stories__gte=int(params.get("stories_min")))
+            qs = qs.filter(stories__gte=float(params.get("stories_min")))
+        if params.get("stories_max"):
+            qs = qs.filter(stories__lte=float(params.get("stories_max")))
         if params.get("year_built_min"):
             qs = qs.filter(year_built__gte=int(params.get("year_built_min")))
+        if params.get("year_built_max"):
+            qs = qs.filter(year_built__lte=int(params.get("year_built_max")))
     except (TypeError, ValueError):
         pass
 

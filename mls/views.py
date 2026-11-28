@@ -1578,6 +1578,22 @@ class RecommendationTrackAPIView(APIView):
         return Response({"ok": True}, status=status.HTTP_201_CREATED)
 
 
+class SearchFiltersSchemaAPIView(APIView):
+    """
+    GET /api/mls/properties/filter-schema/
+
+    REALTOR.ca-aligned primary + advanced filter schema for the map/list
+    search UI. Prefer this over Buy/Rent/Sold tabs.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from mls.services.search_filters_schema import get_search_filters_schema
+
+        return Response(get_search_filters_schema(), status=status.HTTP_200_OK)
+
+
 class PropertyTypesAPIView(APIView):
     """
     GET /api/mls/properties/property-types/
@@ -1586,6 +1602,8 @@ class PropertyTypesAPIView(APIView):
     Open Houses (active listings with an upcoming open house). Optional:
       - province (comma-separated province codes, e.g. ON,QC)
       - listing_type: all | exclusive | lease | precon | community
+
+    Deprecated for browse UX: use filter-schema + Filters panel instead of tabs.
     """
 
     def get(self, request):
@@ -3831,7 +3849,9 @@ class PropertySnapshotsAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, listing_key):
-        qs = (
+        from mls.services.listing_history import build_listing_history
+
+        qs = list(
             PropertySnapshot.objects.filter(listing_key=listing_key)
             .order_by("-created_at")[:50]
         )
@@ -3844,7 +3864,16 @@ class PropertySnapshotsAPIView(APIView):
             }
             for s in qs
         ]
-        return Response({"listing_key": listing_key, "snapshots": data})
+        # Coalesced Buy/Sell History for the property-detail table.
+        history_payload = build_listing_history(listing_key)
+        return Response(
+            {
+                "listing_key": listing_key,
+                "listing_id": history_payload.get("listing_id"),
+                "snapshots": data,
+                "history": history_payload.get("history") or [],
+            }
+        )
 
 
 class PropertyNoteAPIView(APIView):

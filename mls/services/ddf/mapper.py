@@ -57,6 +57,61 @@ def _living_area_fields(data) -> dict:
     }
 
 
+def _yn_bool(value) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"y", "yes", "true", "1"}:
+        return True
+    if text in {"n", "no", "false", "0"}:
+        return False
+    return safe_bool(value)
+
+
+def _map_washrooms_json(data) -> list[dict]:
+    """
+    REALM Washroom Info table: count × pieces × level.
+
+    Feeds vary: Washrooms[] array, or Bathroom* flat fields.
+    """
+    rows: list[dict] = []
+    raw = data.get("Washrooms") or data.get("BathroomDetails") or []
+    if isinstance(raw, dict):
+        raw = [raw]
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            pieces = (
+                safe_int(item.get("WashroomsPieces"))
+                or safe_int(item.get("Pieces"))
+                or safe_int(item.get("BathroomPieces"))
+            )
+            level = (
+                safe_str(item.get("WashroomsLevel"))
+                or safe_str(item.get("Level"))
+                or safe_str(item.get("BathroomLevel"))
+            )
+            count = (
+                safe_int(item.get("WashroomsNumberOf"))
+                or safe_int(item.get("NumberOf"))
+                or safe_int(item.get("Count"))
+                or 1
+            )
+            if pieces is None and level is None:
+                continue
+            rows.append(
+                {
+                    "count": count or 1,
+                    "pieces": pieces,
+                    "level": level,
+                }
+            )
+    return rows
+
+
 def map_property_defaults(data):
     """
     Convert one raw DDF property dictionary into values understood
@@ -113,6 +168,11 @@ def map_property_defaults(data):
         "appliances": safe_list(data.get("Appliances")),
         "other_equipment": safe_list(data.get("OtherEquipment")),
         "security_features": safe_list(data.get("SecurityFeatures")),
+        # Inclusions = chattels text; InteriorFeatures = interior chips;
+        # property_features (below) = REALM "Features" (Family Room, Fireplace).
+        "inclusions": safe_str(data.get("Inclusions"))
+        or safe_list(data.get("Inclusions")),
+        "interior_features": safe_list(data.get("InteriorFeatures")),
 
         # Financial and association information
         "total_actual_rent": safe_decimal(data.get("TotalActualRent")),
@@ -190,11 +250,35 @@ def map_property_defaults(data):
         ),
         "garage_size": safe_str(data.get("GarageType"))
         or safe_list(data.get("GarageType")),
+        "garage_yn": _yn_bool(data.get("GarageYN")),
+        "open_parking_spaces": safe_int(
+            data.get("OpenParkingSpaces")
+            if data.get("OpenParkingSpaces") is not None
+            else data.get("ParkingSpaces")
+        ),
         "kitchens": safe_int(
             data.get("NumberOfKitchens")
             if data.get("NumberOfKitchens") is not None
             else data.get("KitchensTotalInteger")
         ),
+        "rooms_total": safe_int(data.get("RoomsTotal")),
+        "family_room_yn": _yn_bool(data.get("FamilyRoomYN")),
+        "direction_faces": safe_str(data.get("DirectionFaces"))
+        or safe_str(data.get("FrontageDirection")),
+        "cross_street": safe_str(data.get("CrossStreet")),
+        "tax_legal_description": safe_str(data.get("TaxLegalDescription"))
+        or safe_str(data.get("LegalDescription")),
+        "possession": safe_str(data.get("Possession"))
+        or safe_str(data.get("PossessionDate"))
+        or safe_str(data.get("PossessionRemarks")),
+        "laundry_features": safe_list(data.get("LaundryFeatures"))
+        or safe_str(data.get("LaundryLevel")),
+        "locker": safe_str(data.get("Locker"))
+        or safe_str(data.get("LockerLevel")),
+        "link_yn": _yn_bool(data.get("LinkYN")),
+        "property_features": safe_list(data.get("PropertyFeatures"))
+        or safe_list(data.get("Features")),
+        "washrooms_json": _map_washrooms_json(data),
         "year_built": safe_int(data.get("YearBuilt"))
         or _year_from_approximate_age(data.get("ApproximateAge"))
         or _year_from_approximate_age(data.get("PropertyAge"))

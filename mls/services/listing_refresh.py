@@ -61,6 +61,26 @@ SELECT_FIELDS_CORE = [
     "ArchitecturalStyle",
     "ConstructionMaterials",
     "ExteriorFeatures",
+    "Appliances",
+    "OtherEquipment",
+    "Inclusions",
+    "InteriorFeatures",
+    "Features",
+    "PropertyFeatures",
+    "BathroomsPartial",
+    "GarageYN",
+    "FamilyRoomYN",
+    "DirectionFaces",
+    "RoomsTotal",
+    "OpenParkingSpaces",
+    "CrossStreet",
+    "TaxLegalDescription",
+    "Possession",
+    "LaundryFeatures",
+    "Locker",
+    "LinkYN",
+    "Roof",
+    "FoundationDetails",
     "PublicRemarks",
     "OriginalEntryTimestamp",
     "ModificationTimestamp",
@@ -185,6 +205,13 @@ def map_ampre_row(row: dict) -> dict:
         "bedrooms_above_grade": _int(row.get("BedroomsAboveGrade")),
         "bedrooms_below_grade": _int(row.get("BedroomsBelowGrade")),
         "bathrooms_total_integer": _int(row.get("BathroomsTotalInteger")),
+        "bathrooms_partial": _int(row.get("BathroomsPartial")),
+        "appliances": _str_or_join(row.get("Appliances")),
+        "other_equipment": _str_or_join(row.get("OtherEquipment")),
+        "inclusions": _str_or_join(row.get("Inclusions")),
+        "interior_features": _str_or_join(
+            row.get("InteriorFeatures") or row.get("Features")
+        ),
         "living_area": living,
         "living_area_minimum": living_min,
         "living_area_maximum": living_max,
@@ -203,15 +230,59 @@ def map_ampre_row(row: dict) -> dict:
             else row.get("CoveredSpaces")
         ),
         "garage_size": _str_or_join(garage_type),
+        "garage_yn": (
+            True
+            if str(row.get("GarageYN") or "").strip().lower() in {"y", "yes", "true", "1"}
+            else (
+                False
+                if str(row.get("GarageYN") or "").strip().lower() in {"n", "no", "false", "0"}
+                else None
+            )
+        ),
+        "open_parking_spaces": _int(
+            row.get("OpenParkingSpaces")
+            if row.get("OpenParkingSpaces") is not None
+            else row.get("ParkingSpaces")
+        ),
         "kitchens": _int(
             row.get("NumberOfKitchens")
             if row.get("NumberOfKitchens") is not None
             else row.get("KitchensTotalInteger")
         ),
+        "rooms_total": _int(row.get("RoomsTotal")),
+        "family_room_yn": (
+            True
+            if str(row.get("FamilyRoomYN") or "").strip().lower() in {"y", "yes", "true", "1"}
+            else (
+                False
+                if str(row.get("FamilyRoomYN") or "").strip().lower() in {"n", "no", "false", "0"}
+                else None
+            )
+        ),
+        "direction_faces": _str_or_join(row.get("DirectionFaces"), 50),
+        "cross_street": _str_or_join(row.get("CrossStreet")),
+        "tax_legal_description": _str_or_join(row.get("TaxLegalDescription")),
+        "possession": _str_or_join(row.get("Possession") or row.get("PossessionRemarks")),
+        "laundry_features": _str_or_join(row.get("LaundryFeatures")),
+        "locker": _str_or_join(row.get("Locker"), 120),
+        "link_yn": (
+            True
+            if str(row.get("LinkYN") or "").strip().lower() in {"y", "yes", "true", "1"}
+            else (
+                False
+                if str(row.get("LinkYN") or "").strip().lower() in {"n", "no", "false", "0"}
+                else None
+            )
+        ),
+        "property_features": _str_or_join(
+            row.get("PropertyFeatures") or row.get("Features")
+        ),
         "stories": _int(row.get("Stories") or row.get("StoriesTotal")),
         "architectural_style": _str_or_join(row.get("ArchitecturalStyle")),
         "construction_materials": _str_or_join(row.get("ConstructionMaterials")),
         "exterior_features": _str_or_join(row.get("ExteriorFeatures")),
+        "roof": _str_or_join(row.get("Roof")),
+        "foundation_details": _str_or_join(row.get("FoundationDetails")),
         "list_office_name": _str_or_join(row.get("ListOfficeName"), 2000),
         "list_office_key": _str_or_join(row.get("ListOfficeKey")),
         "building_features": _str_or_join(row.get("BuildingFeatures")),
