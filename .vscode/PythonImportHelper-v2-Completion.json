@@ -1176,6 +1176,14 @@
         "documentation": {}
     },
     {
+        "label": "migrations",
+        "importPath": "django.db",
+        "description": "django.db",
+        "isExtraImport": true,
+        "detail": "django.db",
+        "documentation": {}
+    },
+    {
         "label": "transaction",
         "importPath": "django.db",
         "description": "django.db",
@@ -3262,63 +3270,15 @@
         "documentation": {}
     },
     {
-        "label": "datetime",
-        "importPath": "datetime",
-        "description": "datetime",
+        "label": "annotations",
+        "importPath": "__future__",
+        "description": "__future__",
         "isExtraImport": true,
-        "detail": "datetime",
-        "documentation": {}
-    },
-    {
-        "label": "timedelta",
-        "importPath": "datetime",
-        "description": "datetime",
-        "isExtraImport": true,
-        "detail": "datetime",
+        "detail": "__future__",
         "documentation": {}
     },
     {
         "label": "datetime",
-        "importPath": "datetime",
-        "description": "datetime",
-        "isExtraImport": true,
-        "detail": "datetime",
-        "documentation": {}
-    },
-    {
-        "label": "timezone",
-        "importPath": "datetime",
-        "description": "datetime",
-        "isExtraImport": true,
-        "detail": "datetime",
-        "documentation": {}
-    },
-    {
-        "label": "timedelta",
-        "importPath": "datetime",
-        "description": "datetime",
-        "isExtraImport": true,
-        "detail": "datetime",
-        "documentation": {}
-    },
-    {
-        "label": "date",
-        "importPath": "datetime",
-        "description": "datetime",
-        "isExtraImport": true,
-        "detail": "datetime",
-        "documentation": {}
-    },
-    {
-        "label": "timedelta",
-        "importPath": "datetime",
-        "description": "datetime",
-        "isExtraImport": true,
-        "detail": "datetime",
-        "documentation": {}
-    },
-    {
-        "label": "date",
         "importPath": "datetime",
         "description": "datetime",
         "isExtraImport": true,
@@ -3350,7 +3310,7 @@
         "documentation": {}
     },
     {
-        "label": "date",
+        "label": "timedelta",
         "importPath": "datetime",
         "description": "datetime",
         "isExtraImport": true,
@@ -3358,7 +3318,7 @@
         "documentation": {}
     },
     {
-        "label": "timedelta",
+        "label": "date",
         "importPath": "datetime",
         "description": "datetime",
         "isExtraImport": true,
@@ -3406,6 +3366,62 @@
         "documentation": {}
     },
     {
+        "label": "date",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
+        "label": "timedelta",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
+        "label": "timedelta",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
+        "label": "date",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
+        "label": "timedelta",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
+        "label": "datetime",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
+        "label": "timezone",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
         "label": "datetime",
         "importPath": "datetime",
         "description": "datetime",
@@ -3439,6 +3455,14 @@
     },
     {
         "label": "timedelta",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
+        "label": "timezone",
         "importPath": "datetime",
         "description": "datetime",
         "isExtraImport": true,
@@ -3542,6 +3566,14 @@
         "documentation": {}
     },
     {
+        "label": "timezone",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
         "label": "date",
         "importPath": "datetime",
         "description": "datetime",
@@ -3623,6 +3655,14 @@
     },
     {
         "label": "datetime",
+        "importPath": "datetime",
+        "description": "datetime",
+        "isExtraImport": true,
+        "detail": "datetime",
+        "documentation": {}
+    },
+    {
+        "label": "timezone",
         "importPath": "datetime",
         "description": "datetime",
         "isExtraImport": true,
@@ -4843,6 +4883,14 @@
         "description": "drf_spectacular.utils",
         "isExtraImport": true,
         "detail": "drf_spectacular.utils",
+        "documentation": {}
+    },
+    {
+        "label": "cache",
+        "importPath": "django.core.cache",
+        "description": "django.core.cache",
+        "isExtraImport": true,
+        "detail": "django.core.cache",
         "documentation": {}
     },
     {
@@ -6208,6 +6256,14 @@
         "documentation": {}
     },
     {
+        "label": "TYPE_CHECKING",
+        "importPath": "typing",
+        "description": "typing",
+        "isExtraImport": true,
+        "detail": "typing",
+        "documentation": {}
+    },
+    {
         "label": "Optional",
         "importPath": "typing",
         "description": "typing",
@@ -6361,6 +6417,14 @@
     },
     {
         "label": "Sequence",
+        "importPath": "typing",
+        "description": "typing",
+        "isExtraImport": true,
+        "detail": "typing",
+        "documentation": {}
+    },
+    {
+        "label": "Any",
         "importPath": "typing",
         "description": "typing",
         "isExtraImport": true,
@@ -6841,6 +6905,14 @@
         "documentation": {}
     },
     {
+        "label": "_has_sold_below_image",
+        "importPath": "homepage.services.feeds",
+        "description": "homepage.services.feeds",
+        "isExtraImport": true,
+        "detail": "homepage.services.feeds",
+        "documentation": {}
+    },
+    {
         "label": "_is_complete_sold_below_row",
         "importPath": "homepage.services.feeds",
         "description": "homepage.services.feeds",
@@ -7165,6 +7237,30 @@
     },
     {
         "label": "InvalidOperation",
+        "importPath": "decimal",
+        "description": "decimal",
+        "isExtraImport": true,
+        "detail": "decimal",
+        "documentation": {}
+    },
+    {
+        "label": "Decimal",
+        "importPath": "decimal",
+        "description": "decimal",
+        "isExtraImport": true,
+        "detail": "decimal",
+        "documentation": {}
+    },
+    {
+        "label": "InvalidOperation",
+        "importPath": "decimal",
+        "description": "decimal",
+        "isExtraImport": true,
+        "detail": "decimal",
+        "documentation": {}
+    },
+    {
+        "label": "ROUND_DOWN",
         "importPath": "decimal",
         "description": "decimal",
         "isExtraImport": true,
@@ -7581,6 +7677,14 @@
     },
     {
         "label": "Q",
+        "importPath": "django.db.models",
+        "description": "django.db.models",
+        "isExtraImport": true,
+        "detail": "django.db.models",
+        "documentation": {}
+    },
+    {
+        "label": "F",
         "importPath": "django.db.models",
         "description": "django.db.models",
         "isExtraImport": true,
@@ -8518,6 +8622,22 @@
     },
     {
         "label": "UserToured",
+        "importPath": "mls.models",
+        "description": "mls.models",
+        "isExtraImport": true,
+        "detail": "mls.models",
+        "documentation": {}
+    },
+    {
+        "label": "Content",
+        "importPath": "mls.models",
+        "description": "mls.models",
+        "isExtraImport": true,
+        "detail": "mls.models",
+        "documentation": {}
+    },
+    {
+        "label": "PreComProperty",
         "importPath": "mls.models",
         "description": "mls.models",
         "isExtraImport": true,
@@ -10668,14 +10788,6 @@
         "documentation": {}
     },
     {
-        "label": "RESIDENTIAL_CLAUSE",
-        "importPath": "homepage.services.ampre",
-        "description": "homepage.services.ampre",
-        "isExtraImport": true,
-        "detail": "homepage.services.ampre",
-        "documentation": {}
-    },
-    {
         "label": "city_clause",
         "importPath": "homepage.services.ampre",
         "description": "homepage.services.ampre",
@@ -10689,6 +10801,30 @@
         "description": "mls.services.listing_sync_status",
         "isExtraImport": true,
         "detail": "mls.services.listing_sync_status",
+        "documentation": {}
+    },
+    {
+        "label": "EXCLUDE_AG_INDUSTRY_CLAUSE",
+        "importPath": "mls.services.sync_filters",
+        "description": "mls.services.sync_filters",
+        "isExtraImport": true,
+        "detail": "mls.services.sync_filters",
+        "documentation": {}
+    },
+    {
+        "label": "EXCLUDE_AG_INDUSTRY_CLAUSE",
+        "importPath": "mls.services.sync_filters",
+        "description": "mls.services.sync_filters",
+        "isExtraImport": true,
+        "detail": "mls.services.sync_filters",
+        "documentation": {}
+    },
+    {
+        "label": "and_filters",
+        "importPath": "mls.services.sync_filters",
+        "description": "mls.services.sync_filters",
+        "isExtraImport": true,
+        "detail": "mls.services.sync_filters",
         "documentation": {}
     },
     {
@@ -11377,6 +11513,102 @@
         "documentation": {}
     },
     {
+        "label": "PreComPropertySerializer",
+        "importPath": "mls.serializers_precon",
+        "description": "mls.serializers_precon",
+        "isExtraImport": true,
+        "detail": "mls.serializers_precon",
+        "documentation": {}
+    },
+    {
+        "label": "_featured_image_url",
+        "importPath": "mls.serializers_precon",
+        "description": "mls.serializers_precon",
+        "isExtraImport": true,
+        "detail": "mls.serializers_precon",
+        "documentation": {}
+    },
+    {
+        "label": "PRECON_DOCUMENT_TYPES",
+        "importPath": "mls.serializers_precon",
+        "description": "mls.serializers_precon",
+        "isExtraImport": true,
+        "detail": "mls.serializers_precon",
+        "documentation": {}
+    },
+    {
+        "label": "PreComBulkUploadResponseSerializer",
+        "importPath": "mls.serializers_precon",
+        "description": "mls.serializers_precon",
+        "isExtraImport": true,
+        "detail": "mls.serializers_precon",
+        "documentation": {}
+    },
+    {
+        "label": "PreComBulkUploadSerializer",
+        "importPath": "mls.serializers_precon",
+        "description": "mls.serializers_precon",
+        "isExtraImport": true,
+        "detail": "mls.serializers_precon",
+        "documentation": {}
+    },
+    {
+        "label": "PreComPropertyDetailSerializer",
+        "importPath": "mls.serializers_precon",
+        "description": "mls.serializers_precon",
+        "isExtraImport": true,
+        "detail": "mls.serializers_precon",
+        "documentation": {}
+    },
+    {
+        "label": "PreComPropertySerializer",
+        "importPath": "mls.serializers_precon",
+        "description": "mls.serializers_precon",
+        "isExtraImport": true,
+        "detail": "mls.serializers_precon",
+        "documentation": {}
+    },
+    {
+        "label": "resolve_precon_document_url",
+        "importPath": "mls.serializers_precon",
+        "description": "mls.serializers_precon",
+        "isExtraImport": true,
+        "detail": "mls.serializers_precon",
+        "documentation": {}
+    },
+    {
+        "label": "cities_for_request",
+        "importPath": "mls.services.visitor_place",
+        "description": "mls.services.visitor_place",
+        "isExtraImport": true,
+        "detail": "mls.services.visitor_place",
+        "documentation": {}
+    },
+    {
+        "label": "ip_city_from_request",
+        "importPath": "mls.services.visitor_place",
+        "description": "mls.services.visitor_place",
+        "isExtraImport": true,
+        "detail": "mls.services.visitor_place",
+        "documentation": {}
+    },
+    {
+        "label": "parse_cities_param",
+        "importPath": "mls.services.visitor_place",
+        "description": "mls.services.visitor_place",
+        "isExtraImport": true,
+        "detail": "mls.services.visitor_place",
+        "documentation": {}
+    },
+    {
+        "label": "parse_cities_param",
+        "importPath": "mls.services.visitor_place",
+        "description": "mls.services.visitor_place",
+        "isExtraImport": true,
+        "detail": "mls.services.visitor_place",
+        "documentation": {}
+    },
+    {
         "label": "Cast",
         "importPath": "django.db.models.functions",
         "description": "django.db.models.functions",
@@ -11607,62 +11839,6 @@
         "description": "django.db.models.manager",
         "isExtraImport": true,
         "detail": "django.db.models.manager",
-        "documentation": {}
-    },
-    {
-        "label": "_featured_image_url",
-        "importPath": "mls.serializers_precon",
-        "description": "mls.serializers_precon",
-        "isExtraImport": true,
-        "detail": "mls.serializers_precon",
-        "documentation": {}
-    },
-    {
-        "label": "PRECON_DOCUMENT_TYPES",
-        "importPath": "mls.serializers_precon",
-        "description": "mls.serializers_precon",
-        "isExtraImport": true,
-        "detail": "mls.serializers_precon",
-        "documentation": {}
-    },
-    {
-        "label": "PreComBulkUploadResponseSerializer",
-        "importPath": "mls.serializers_precon",
-        "description": "mls.serializers_precon",
-        "isExtraImport": true,
-        "detail": "mls.serializers_precon",
-        "documentation": {}
-    },
-    {
-        "label": "PreComBulkUploadSerializer",
-        "importPath": "mls.serializers_precon",
-        "description": "mls.serializers_precon",
-        "isExtraImport": true,
-        "detail": "mls.serializers_precon",
-        "documentation": {}
-    },
-    {
-        "label": "PreComPropertyDetailSerializer",
-        "importPath": "mls.serializers_precon",
-        "description": "mls.serializers_precon",
-        "isExtraImport": true,
-        "detail": "mls.serializers_precon",
-        "documentation": {}
-    },
-    {
-        "label": "PreComPropertySerializer",
-        "importPath": "mls.serializers_precon",
-        "description": "mls.serializers_precon",
-        "isExtraImport": true,
-        "detail": "mls.serializers_precon",
-        "documentation": {}
-    },
-    {
-        "label": "resolve_precon_document_url",
-        "importPath": "mls.serializers_precon",
-        "description": "mls.serializers_precon",
-        "isExtraImport": true,
-        "detail": "mls.serializers_precon",
         "documentation": {}
     },
     {
@@ -12368,14 +12544,6 @@
         "description": "mls.services.web_push",
         "isExtraImport": true,
         "detail": "mls.services.web_push",
-        "documentation": {}
-    },
-    {
-        "label": "parse_cities_param",
-        "importPath": "mls.services.visitor_place",
-        "description": "mls.services.visitor_place",
-        "isExtraImport": true,
-        "detail": "mls.services.visitor_place",
         "documentation": {}
     },
     {
@@ -14494,7 +14662,7 @@
         "kind": 2,
         "importPath": "homepage.services.feeds",
         "description": "homepage.services.feeds",
-        "peekOfCode": "def sold_below_purchase(\n    limit: int = 3,\n    city: str | None = None,\n    cities: list[str] | None = None,\n) -> dict[str, Any]:\n    preferred = [c for c in (cities or ([city] if city else [])) if c]\n    rows, computed_at = _sold_below_from_table(limit, preferred or None)\n    rows = [row for row in rows if _is_complete_sold_below_row(row)]\n    source = \"table\"\n    if len(rows) < limit:",
+        "peekOfCode": "def sold_below_purchase(\n    limit: int = 3,\n    city: str | None = None,\n    cities: list[str] | None = None,\n) -> dict[str, Any]:\n    preferred = [c for c in (cities or ([city] if city else [])) if c]\n    # Pull extra candidates so imageless rows can be skipped after photo attach.\n    fetch_limit = max(limit * 4, limit)\n    rows, computed_at = _sold_below_from_table(fetch_limit, preferred or None)\n    rows = [row for row in rows if _is_complete_sold_below_row(row)]",
         "detail": "homepage.services.feeds",
         "documentation": {}
     },
@@ -16600,7 +16768,7 @@
         "kind": 6,
         "importPath": "mls.management.commands.sync_ampre_closed",
         "description": "mls.management.commands.sync_ampre_closed",
-        "peekOfCode": "class Command(BaseCommand):\n    help = (\n        \"Upsert AMPRE Closed/Expired/Cancelled/Withdrawn listings. \"\n        \"Append-only — never deletes Property rows.\"\n    )\n    def add_arguments(self, parser):\n        parser.add_argument(\n            \"--full\",\n            action=\"store_true\",\n            help=(",
+        "peekOfCode": "class Command(BaseCommand):\n    help = (\n        \"Upsert AMPRE listings for all statuses \"\n        \"(Active / Closed / De-listed), excluding Agriculture / \"\n        \"Industrial. Append-only — never deletes Property rows.\"\n    )\n    def add_arguments(self, parser):\n        parser.add_argument(\n            \"--full\",\n            action=\"store_true\",",
         "detail": "mls.management.commands.sync_ampre_closed",
         "documentation": {}
     },
@@ -16627,7 +16795,16 @@
         "kind": 5,
         "importPath": "mls.management.commands.sync_ampre_closed",
         "description": "mls.management.commands.sync_ampre_closed",
-        "peekOfCode": "INACTIVE_STATUS_FILTER = (\n    \"(\"\n    \"StandardStatus eq 'Expired' or StandardStatus eq 'Canceled' \"\n    \"or StandardStatus eq 'Cancelled' or StandardStatus eq 'Withdrawn' \"\n    \"or StandardStatus eq 'Terminated'\"\n    \")\"\n)\n# Fields written on every upsert (everything map_ampre_inactive returns\n# except category_type, which we never overwrite on existing rows).\n_UPDATE_FIELDS = [",
+        "peekOfCode": "INACTIVE_STATUS_FILTER = (\n    \"(\"\n    \"StandardStatus eq 'Expired' or StandardStatus eq 'Canceled' \"\n    \"or StandardStatus eq 'Cancelled' or StandardStatus eq 'Withdrawn' \"\n    \"or StandardStatus eq 'Terminated'\"\n    \")\"\n)\n# All non-ag / non-industrial types (Residential, Commercial, Retail, …).\nTYPE_CLAUSE = EXCLUDE_AG_INDUSTRY_CLAUSE\n# Fields written on every upsert (everything map_ampre_inactive returns",
+        "detail": "mls.management.commands.sync_ampre_closed",
+        "documentation": {}
+    },
+    {
+        "label": "TYPE_CLAUSE",
+        "kind": 5,
+        "importPath": "mls.management.commands.sync_ampre_closed",
+        "description": "mls.management.commands.sync_ampre_closed",
+        "peekOfCode": "TYPE_CLAUSE = EXCLUDE_AG_INDUSTRY_CLAUSE\n# Fields written on every upsert (everything map_ampre_inactive returns\n# except category_type, which we never overwrite on existing rows).\n_UPDATE_FIELDS = [\n    \"listing_id\",\n    \"standard_status\",\n    \"list_price\",\n    \"close_price\",\n    \"close_date\",\n    \"previous_list_price\",",
         "detail": "mls.management.commands.sync_ampre_closed",
         "documentation": {}
     },
@@ -16645,7 +16822,7 @@
         "kind": 6,
         "importPath": "mls.management.commands.sync_ddf_properties",
         "description": "mls.management.commands.sync_ddf_properties",
-        "peekOfCode": "class Command(BaseCommand):\n    \"\"\"\n    Sync DDF listings into the Property table. Append-only.\n    This command NEVER deletes Property rows. Every sync either INSERTS\n    new listings or UPDATES existing ones; stale rows are left in place.\n    The only deletions anywhere in this file are on Room / Media child\n    rows inside process_batch, and those are immediately re-created from\n    the fresh DDF payload (refresh semantics, not purge).\n    \"\"\"\n    help = \"Sync DDF listings (full catalogue or N-hour window). Append-only.\"",
+        "peekOfCode": "class Command(BaseCommand):\n    \"\"\"\n    Sync DDF listings into the Property table. Append-only.\n    CREA DDF is Active-only upstream (no Closed/Expired). Within that\n    feed we sync every PropertySubType except Agriculture / Farm /\n    Industrial. This command NEVER deletes Property rows — only insert\n    or update. Room / Media child rows are refresh-replaced per listing.\n    \"\"\"\n    help = (\n        \"Sync DDF listings (Active catalogue; excludes Agriculture / \"",
         "detail": "mls.management.commands.sync_ddf_properties",
         "documentation": {}
     },
@@ -16654,7 +16831,16 @@
         "kind": 5,
         "importPath": "mls.management.commands.sync_ddf_properties",
         "description": "mls.management.commands.sync_ddf_properties",
-        "peekOfCode": "_VALID_PROPERTY_FIELDS = {\n    field.name\n    for field in Property._meta.get_fields()\n    if getattr(field, \"concrete\", False) and not field.many_to_many\n}\ndef _safe_property_defaults(raw_data):\n    \"\"\"Map a DDF listing dict to Property kwargs, dropping unknown keys.\"\"\"\n    mapped = map_property_defaults(raw_data)\n    return {k: v for k, v in mapped.items() if k in _VALID_PROPERTY_FIELDS}\nclass Command(BaseCommand):",
+        "peekOfCode": "_VALID_PROPERTY_FIELDS = {\n    field.name\n    for field in Property._meta.get_fields()\n    if getattr(field, \"concrete\", False) and not field.many_to_many\n}\n_DECIMAL_FIELD_LIMITS = {\n    field.name: (field.max_digits, field.decimal_places)\n    for field in Property._meta.get_fields()\n    if getattr(field, \"get_internal_type\", lambda: \"\")() == \"DecimalField\"\n}",
+        "detail": "mls.management.commands.sync_ddf_properties",
+        "documentation": {}
+    },
+    {
+        "label": "_DECIMAL_FIELD_LIMITS",
+        "kind": 5,
+        "importPath": "mls.management.commands.sync_ddf_properties",
+        "description": "mls.management.commands.sync_ddf_properties",
+        "peekOfCode": "_DECIMAL_FIELD_LIMITS = {\n    field.name: (field.max_digits, field.decimal_places)\n    for field in Property._meta.get_fields()\n    if getattr(field, \"get_internal_type\", lambda: \"\")() == \"DecimalField\"\n}\ndef _clamp_decimal(value, max_digits, decimal_places):\n    \"\"\"Null out values that would overflow the Postgres numeric column.\"\"\"\n    if value is None:\n        return None\n    try:",
         "detail": "mls.management.commands.sync_ddf_properties",
         "documentation": {}
     },
@@ -17325,6 +17511,15 @@
         "documentation": {}
     },
     {
+        "label": "Migration",
+        "kind": 6,
+        "importPath": "mls.migrations.0063_rename_mls_preconact_proj_evt_idx_mls_precona_project_429f6c_idx_and_more",
+        "description": "mls.migrations.0063_rename_mls_preconact_proj_evt_idx_mls_precona_project_429f6c_idx_and_more",
+        "peekOfCode": "class Migration(migrations.Migration):\n    dependencies = [\n        ('mls', '0062_high_return_rails'),\n    ]\n    operations = [\n        migrations.RenameIndex(\n            model_name='preconactivityevent',\n            new_name='mls_precona_project_429f6c_idx',\n            old_name='mls_preconact_proj_evt_idx',\n        ),",
+        "detail": "mls.migrations.0063_rename_mls_preconact_proj_evt_idx_mls_precona_project_429f6c_idx_and_more",
+        "documentation": {}
+    },
+    {
         "label": "get_page_with_retries",
         "kind": 2,
         "importPath": "mls.services.ddf.client",
@@ -17887,7 +18082,7 @@
         "kind": 2,
         "importPath": "mls.services.valuation.comps",
         "description": "mls.services.valuation.comps",
-        "peekOfCode": "def select_active_comps(subject: Dict[str, Any], k: int = ACTIVE_K) -> List[Dict[str, Any]]:\n    \"\"\"Active listings near the subject — DOM / asking-price ceiling signal.\"\"\"\n    lat = subject.get(\"latitude\")\n    lng = subject.get(\"longitude\")\n    if lat is None or lng is None:\n        return []\n    try:\n        slat, slng = float(lat), float(lng)\n    except (TypeError, ValueError):\n        return []",
+        "peekOfCode": "def select_active_comps(subject: Dict[str, Any], k: int = ACTIVE_K) -> List[Dict[str, Any]]:\n    \"\"\"Active for-sale listings near the subject — suggestion cards, not sold comps.\"\"\"\n    lat = subject.get(\"latitude\")\n    lng = subject.get(\"longitude\")\n    if lat is None or lng is None:\n        return []\n    try:\n        slat, slng = float(lat), float(lng)\n    except (TypeError, ValueError):\n        return []",
         "detail": "mls.services.valuation.comps",
         "documentation": {}
     },
@@ -17896,7 +18091,7 @@
         "kind": 2,
         "importPath": "mls.services.valuation.comps",
         "description": "mls.services.valuation.comps",
-        "peekOfCode": "def select_comps(\n    subject: Dict[str, Any],\n    radius_km: float = 2.0,\n    max_age_days: int = 180,\n    k: int = PRICING_K,\n) -> List[Dict[str, Any]]:\n    \"\"\"Pricing comps: AMPRE ClosePrice first, sold_proxy, then active listings.\n    ``radius_km`` / ``max_age_days`` are retained for call-site compatibility;\n    WOWA progressive passes own the real thresholds.\n    \"\"\"",
+        "peekOfCode": "def select_comps(\n    subject: Dict[str, Any],\n    radius_km: float = 2.0,\n    max_age_days: int = 180,\n    k: int = PRICING_K,\n) -> List[Dict[str, Any]]:\n    \"\"\"Sold comparables only: AMPRE ClosePrice first, then sold_proxy.\n    Active for-sale listings belong in ``select_active_comps`` (suggestion\n    cards), never in the sold-comparison table. Hedonic pricing can still use\n    active listings via ``pricing_comps(..., active_comps)`` when solds are thin.",
         "detail": "mls.services.valuation.comps",
         "documentation": {}
     },
@@ -17941,7 +18136,7 @@
         "kind": 5,
         "importPath": "mls.services.valuation.comps",
         "description": "mls.services.valuation.comps",
-        "peekOfCode": "AMPRE_CACHE_SECONDS = 60 * 60\nAMPRE_MAX_ROWS = 800\nPRICING_K = 8\nACTIVE_K = 5\ndef haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:\n    r = 6371.0\n    p1, p2 = math.radians(lat1), math.radians(lat2)\n    dphi = math.radians(lat2 - lat1)\n    dlmb = math.radians(lon2 - lon1)\n    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2",
+        "peekOfCode": "AMPRE_CACHE_SECONDS = 60 * 60\n# One AMPRE page is enough to rank nearby sold comps; 800-row pulls routinely\n# blew past the browser/proxy timeout on home-evaluation.\nAMPRE_MAX_ROWS = 200\nAMPRE_REQUEST_TIMEOUT_SECONDS = 12\nPRICING_K = 8\nACTIVE_K = 5\ndef haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:\n    r = 6371.0\n    p1, p2 = math.radians(lat1), math.radians(lat2)",
         "detail": "mls.services.valuation.comps",
         "documentation": {}
     },
@@ -17950,7 +18145,16 @@
         "kind": 5,
         "importPath": "mls.services.valuation.comps",
         "description": "mls.services.valuation.comps",
-        "peekOfCode": "AMPRE_MAX_ROWS = 800\nPRICING_K = 8\nACTIVE_K = 5\ndef haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:\n    r = 6371.0\n    p1, p2 = math.radians(lat1), math.radians(lat2)\n    dphi = math.radians(lat2 - lat1)\n    dlmb = math.radians(lon2 - lon1)\n    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2\n    return 2 * r * math.asin(min(1.0, math.sqrt(a)))",
+        "peekOfCode": "AMPRE_MAX_ROWS = 200\nAMPRE_REQUEST_TIMEOUT_SECONDS = 12\nPRICING_K = 8\nACTIVE_K = 5\ndef haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:\n    r = 6371.0\n    p1, p2 = math.radians(lat1), math.radians(lat2)\n    dphi = math.radians(lat2 - lat1)\n    dlmb = math.radians(lon2 - lon1)\n    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2",
+        "detail": "mls.services.valuation.comps",
+        "documentation": {}
+    },
+    {
+        "label": "AMPRE_REQUEST_TIMEOUT_SECONDS",
+        "kind": 5,
+        "importPath": "mls.services.valuation.comps",
+        "description": "mls.services.valuation.comps",
+        "peekOfCode": "AMPRE_REQUEST_TIMEOUT_SECONDS = 12\nPRICING_K = 8\nACTIVE_K = 5\ndef haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:\n    r = 6371.0\n    p1, p2 = math.radians(lat1), math.radians(lat2)\n    dphi = math.radians(lat2 - lat1)\n    dlmb = math.radians(lon2 - lon1)\n    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2\n    return 2 * r * math.asin(min(1.0, math.sqrt(a)))",
         "detail": "mls.services.valuation.comps",
         "documentation": {}
     },
@@ -17978,6 +18182,15 @@
         "importPath": "mls.services.valuation.geocode",
         "description": "mls.services.valuation.geocode",
         "peekOfCode": "def geocode_address(\n    query: str,\n    *,\n    city: str | None = None,\n    postal_code: str | None = None,\n    province: str = \"Ontario\",\n    country: str = \"Canada\",\n) -> tuple[Optional[float], Optional[float]]:\n    \"\"\"Return (lat, lng) for an address, trying postal-aware fallbacks.\"\"\"\n    primary = \" \".join((query or \"\").split()).strip()",
+        "detail": "mls.services.valuation.geocode",
+        "documentation": {}
+    },
+    {
+        "label": "ensure_property_coordinates",
+        "kind": 2,
+        "importPath": "mls.services.valuation.geocode",
+        "description": "mls.services.valuation.geocode",
+        "peekOfCode": "def ensure_property_coordinates(p: \"Property\") -> tuple[Optional[float], Optional[float]]:\n    \"\"\"Return stored coords, or geocode + persist so detail/schools/valuation share one location.\n    Property detail and the schools tab read ``latitude``/``longitude`` from the\n    listing payload. Valuation used to geocode on the side, so Network could show\n    coords on an estimate request while the property page still said location was\n    missing. Filling here keeps those surfaces aligned.\n    \"\"\"\n    lat = float(p.latitude) if p.latitude is not None else None\n    lng = float(p.longitude) if p.longitude is not None else None\n    if lat is not None and lng is not None:",
         "detail": "mls.services.valuation.geocode",
         "documentation": {}
     },
@@ -18454,7 +18667,7 @@
         "kind": 2,
         "importPath": "mls.services.ampre_client",
         "description": "mls.services.ampre_client",
-        "peekOfCode": "def fetch_property_page(\n    filter_expression: str | None = None,\n    select_fields: Iterable[str] | None = None,\n    orderby: str | None = None,\n    top: int = 500,\n    max_rows: int | None = None,\n) -> list[dict[str, Any]]:\n    \"\"\"Fetch AMPRE Property rows and return the combined ``value`` arrays.\n    ``top`` is the page size, capped at 1000 by AMPRE. ``max_rows`` is the\n    total the caller wants across pages; it defaults to ``top``, so a plain",
+        "peekOfCode": "def fetch_property_page(\n    filter_expression: str | None = None,\n    select_fields: Iterable[str] | None = None,\n    orderby: str | None = None,\n    top: int = 500,\n    max_rows: int | None = None,\n    timeout: float | None = None,\n    progress_callback=None,\n) -> list[dict[str, Any]]:\n    \"\"\"Fetch AMPRE Property rows and return the combined ``value`` arrays.",
         "detail": "mls.services.ampre_client",
         "documentation": {}
     },
@@ -18562,7 +18775,7 @@
         "kind": 2,
         "importPath": "mls.services.ampre_media",
         "description": "mls.services.ampre_media",
-        "peekOfCode": "def refresh_property_media_from_ampre(prop: Property) -> int:\n    keys = _trreb_keys_for(prop)\n    if not keys:\n        return 0\n    photos: list[dict[str, Any]] = []\n    used_key = keys[0]\n    for key in keys:\n        photos = fetch_ampre_photos_for_listing_id(key)\n        if photos:\n            used_key = key",
+        "peekOfCode": "def refresh_property_media_from_ampre(\n    prop: Property,\n    *,\n    verify_url: bool = False,\n) -> int:\n    \"\"\"Fetch AMPRE Media rows and persist ``MediaURL`` strings only.\n    Does **not** download image bytes. ``verify_url`` (off by default)\n    optionally HEAD/GETs the first photo; that probe makes bulk sync\n    orders of magnitude slower and is skipped for catalogue imports.\n    \"\"\"",
         "detail": "mls.services.ampre_media",
         "documentation": {}
     },
@@ -19539,6 +19752,33 @@
         "documentation": {}
     },
     {
+        "label": "build_precon_deals",
+        "kind": 2,
+        "importPath": "mls.services.precon_deals",
+        "description": "mls.services.precon_deals",
+        "peekOfCode": "def build_precon_deals(\n    request,\n    *,\n    limit: int = PRECON_DEALS_DEFAULT_LIMIT,\n    fill: bool = True,\n) -> dict[str, Any]:\n    \"\"\"Return the homepage Pre-Construction Deals payload.\"\"\"\n    from mls.views_precon import (\n        _precon_explicit_cities,\n        _precon_has_search_history,",
+        "detail": "mls.services.precon_deals",
+        "documentation": {}
+    },
+    {
+        "label": "PRECON_DEALS_DEFAULT_LIMIT",
+        "kind": 5,
+        "importPath": "mls.services.precon_deals",
+        "description": "mls.services.precon_deals",
+        "peekOfCode": "PRECON_DEALS_DEFAULT_LIMIT = 6\nPRECON_DEALS_CACHE_TTL_SECONDS = 300\ndef _base_qs():\n    \"\"\"Published, still-active inventory (exclude sold out).\"\"\"\n    return (\n        PreComProperty.objects.select_related(\"content\")\n        .filter(content__status=Content.PUBLISH)\n        .exclude(sales_stage=PreComProperty.SALES_STAGE_SOLD_OUT)\n        .prefetch_related(\"content__attachments\")\n    )",
+        "detail": "mls.services.precon_deals",
+        "documentation": {}
+    },
+    {
+        "label": "PRECON_DEALS_CACHE_TTL_SECONDS",
+        "kind": 5,
+        "importPath": "mls.services.precon_deals",
+        "description": "mls.services.precon_deals",
+        "peekOfCode": "PRECON_DEALS_CACHE_TTL_SECONDS = 300\ndef _base_qs():\n    \"\"\"Published, still-active inventory (exclude sold out).\"\"\"\n    return (\n        PreComProperty.objects.select_related(\"content\")\n        .filter(content__status=Content.PUBLISH)\n        .exclude(sales_stage=PreComProperty.SALES_STAGE_SOLD_OUT)\n        .prefetch_related(\"content__attachments\")\n    )\ndef _newest_order():",
+        "detail": "mls.services.precon_deals",
+        "documentation": {}
+    },
+    {
         "label": "city_match_q",
         "kind": 2,
         "importPath": "mls.services.query_helpers",
@@ -19869,6 +20109,24 @@
         "description": "mls.services.submission_notifications",
         "peekOfCode": "DECISION_COPY = {\n    Status.UNDER_REVIEW: (\n        \"We're reviewing your listing\",\n        \"Our team has started reviewing your listing. We'll email you again once we've decided.\",\n    ),\n    Status.NEEDS_CHANGES: (\n        \"Your listing needs a few changes\",\n        \"Our team reviewed your listing and needs a few changes before it can be published.\",\n    ),\n    Status.APPROVED: (",
         "detail": "mls.services.submission_notifications",
+        "documentation": {}
+    },
+    {
+        "label": "and_filters",
+        "kind": 2,
+        "importPath": "mls.services.sync_filters",
+        "description": "mls.services.sync_filters",
+        "peekOfCode": "def and_filters(*parts: str | None) -> str | None:\n    \"\"\"Join non-empty OData filter fragments with ``and``.\"\"\"\n    bits = [p.strip() for p in parts if p and str(p).strip()]\n    if not bits:\n        return None\n    return \" and \".join(bits)",
+        "detail": "mls.services.sync_filters",
+        "documentation": {}
+    },
+    {
+        "label": "EXCLUDE_AG_INDUSTRY_CLAUSE",
+        "kind": 5,
+        "importPath": "mls.services.sync_filters",
+        "description": "mls.services.sync_filters",
+        "peekOfCode": "EXCLUDE_AG_INDUSTRY_CLAUSE = (\n    \"PropertySubType ne 'Agriculture' \"\n    \"and PropertySubType ne 'Industrial'\"\n)\ndef and_filters(*parts: str | None) -> str | None:\n    \"\"\"Join non-empty OData filter fragments with ``and``.\"\"\"\n    bits = [p.strip() for p in parts if p and str(p).strip()]\n    if not bits:\n        return None\n    return \" and \".join(bits)",
+        "detail": "mls.services.sync_filters",
         "documentation": {}
     },
     {
@@ -21280,7 +21538,7 @@
         "kind": 6,
         "importPath": "mls.serializers",
         "description": "mls.serializers",
-        "peekOfCode": "class MediaDetailSerializer(serializers.ModelSerializer):\n    class Meta:\n        model = Media\n        fields = '__all__' \nclass PropertyDetailSerializer(serializers.ModelSerializer):\n    rooms = RoomSerializer(many=True, read_only=True)\n    media = MediaSerializer(many=True, read_only=True)\n    next_open_house = serializers.SerializerMethodField()\n    class Meta:\n        model = Property",
+        "peekOfCode": "class MediaDetailSerializer(serializers.ModelSerializer):\n    class Meta:\n        model = Media\n        fields = '__all__' \nclass PropertyDetailSerializer(serializers.ModelSerializer):\n    rooms = RoomSerializer(many=True, read_only=True)\n    media = serializers.SerializerMethodField()\n    next_open_house = serializers.SerializerMethodField()\n    class Meta:\n        model = Property",
         "detail": "mls.serializers",
         "documentation": {}
     },
@@ -21289,7 +21547,7 @@
         "kind": 6,
         "importPath": "mls.serializers",
         "description": "mls.serializers",
-        "peekOfCode": "class PropertyDetailSerializer(serializers.ModelSerializer):\n    rooms = RoomSerializer(many=True, read_only=True)\n    media = MediaSerializer(many=True, read_only=True)\n    next_open_house = serializers.SerializerMethodField()\n    class Meta:\n        model = Property\n        fields = '__all__'\n    # Reuse the exact implementation from PropertySerializer so list + detail\n    # return an identical shape (GAP-23: fields='__all__' skips method fields).\n    @extend_schema_field(OpenApiTypes.OBJECT)",
+        "peekOfCode": "class PropertyDetailSerializer(serializers.ModelSerializer):\n    rooms = RoomSerializer(many=True, read_only=True)\n    media = serializers.SerializerMethodField()\n    next_open_house = serializers.SerializerMethodField()\n    class Meta:\n        model = Property\n        fields = '__all__'\n    # Reuse the exact implementation from PropertySerializer so list + detail\n    # return an identical shape (GAP-23: fields='__all__' skips method fields).\n    @extend_schema_field(OpenApiTypes.OBJECT)",
         "detail": "mls.serializers",
         "documentation": {}
     },
@@ -21874,7 +22132,7 @@
         "kind": 5,
         "importPath": "mls.snapshot_utils",
         "description": "mls.snapshot_utils",
-        "peekOfCode": "logger = logging.getLogger(__name__)\ndef _aware_utc(value):\n    \"\"\"Coerce snapshot timestamps to timezone-aware UTC (or None).\"\"\"\n    if value is None:\n        return None\n    if isinstance(value, datetime):\n        if timezone.is_naive(value):\n            return timezone.make_aware(value, timezone.utc)\n        return value.astimezone(timezone.utc)\n    return value",
+        "peekOfCode": "logger = logging.getLogger(__name__)\ndef _aware_utc(value):\n    \"\"\"Coerce snapshot timestamps to timezone-aware UTC (or None).\"\"\"\n    if value is None:\n        return None\n    if isinstance(value, datetime):\n        if timezone.is_naive(value):\n            return timezone.make_aware(value, dt_timezone.utc)\n        return value.astimezone(dt_timezone.utc)\n    return value",
         "detail": "mls.snapshot_utils",
         "documentation": {}
     },
@@ -22221,11 +22479,20 @@
         "documentation": {}
     },
     {
+        "label": "PreconDealsRailTests",
+        "kind": 6,
+        "importPath": "mls.tests_home_rails",
+        "description": "mls.tests_home_rails",
+        "peekOfCode": "class PreconDealsRailTests(TestCase):\n    def setUp(self):\n        cache.clear()\n        now = timezone.now()\n        def project(wp_id, *, title, address=\"\", **extra):\n            content = Content.objects.create(\n                wp_id=wp_id,\n                content_type=Content.PROPERTY,\n                title=title,\n                slug=f\"deals-{wp_id}\",",
+        "detail": "mls.tests_home_rails",
+        "documentation": {}
+    },
+    {
         "label": "FEATURED_URL",
         "kind": 5,
         "importPath": "mls.tests_home_rails",
         "description": "mls.tests_home_rails",
-        "peekOfCode": "FEATURED_URL = \"/api/mls/properties/featured-properties/\"\nPRECON_URL = \"/api/mls/precon-properties/\"\ndef _listing(key, *, days_old=1, status=\"Active\", remarks=\"\", **extra):\n    return Property.objects.create(\n        listing_key=key,\n        city=\"Toronto\",\n        state_or_province=\"ON\",\n        list_price=800000,\n        standard_status=status,\n        public_remarks=remarks,",
+        "peekOfCode": "FEATURED_URL = \"/api/mls/properties/featured-properties/\"\nPRECON_URL = \"/api/mls/precon-properties/\"\nPRECON_DEALS_URL = \"/api/mls/precon-properties/deals/\"\ndef _listing(key, *, days_old=1, status=\"Active\", remarks=\"\", **extra):\n    return Property.objects.create(\n        listing_key=key,\n        city=\"Toronto\",\n        state_or_province=\"ON\",\n        list_price=800000,\n        standard_status=status,",
         "detail": "mls.tests_home_rails",
         "documentation": {}
     },
@@ -22234,7 +22501,16 @@
         "kind": 5,
         "importPath": "mls.tests_home_rails",
         "description": "mls.tests_home_rails",
-        "peekOfCode": "PRECON_URL = \"/api/mls/precon-properties/\"\ndef _listing(key, *, days_old=1, status=\"Active\", remarks=\"\", **extra):\n    return Property.objects.create(\n        listing_key=key,\n        city=\"Toronto\",\n        state_or_province=\"ON\",\n        list_price=800000,\n        standard_status=status,\n        public_remarks=remarks,\n        original_entry_timestamp=timezone.now() - timedelta(days=days_old),",
+        "peekOfCode": "PRECON_URL = \"/api/mls/precon-properties/\"\nPRECON_DEALS_URL = \"/api/mls/precon-properties/deals/\"\ndef _listing(key, *, days_old=1, status=\"Active\", remarks=\"\", **extra):\n    return Property.objects.create(\n        listing_key=key,\n        city=\"Toronto\",\n        state_or_province=\"ON\",\n        list_price=800000,\n        standard_status=status,\n        public_remarks=remarks,",
+        "detail": "mls.tests_home_rails",
+        "documentation": {}
+    },
+    {
+        "label": "PRECON_DEALS_URL",
+        "kind": 5,
+        "importPath": "mls.tests_home_rails",
+        "description": "mls.tests_home_rails",
+        "peekOfCode": "PRECON_DEALS_URL = \"/api/mls/precon-properties/deals/\"\ndef _listing(key, *, days_old=1, status=\"Active\", remarks=\"\", **extra):\n    return Property.objects.create(\n        listing_key=key,\n        city=\"Toronto\",\n        state_or_province=\"ON\",\n        list_price=800000,\n        standard_status=status,\n        public_remarks=remarks,\n        original_entry_timestamp=timezone.now() - timedelta(days=days_old),",
         "detail": "mls.tests_home_rails",
         "documentation": {}
     },
@@ -22306,7 +22582,16 @@
         "kind": 6,
         "importPath": "mls.tests_public_submissions",
         "description": "mls.tests_public_submissions",
-        "peekOfCode": "class FakeQS(list):\n    def filter(self, **kwargs):\n        return FakeQS(s for s in self if all(getattr(s, k) == v for k, v in kwargs.items()))\n    def exclude(self, pk):\n        return FakeQS(s for s in self if s.pk != pk)\nclass SimilarTests(SimpleTestCase):\n    def rank(self, subject, others):\n        with mock.patch.object(views, \"_public_submissions\", return_value=FakeQS([subject, *others])):\n            return [s.pk for s in views.similar_public_submissions(subject, limit=4)]\n    def test_same_project_ranks_first(self):",
+        "peekOfCode": "class FakeQS(list):\n    def filter(self, **kwargs):\n        return FakeQS(s for s in self if all(getattr(s, k) == v for k, v in kwargs.items()))\n    def exclude(self, pk=None, **kwargs):\n        rows = [s for s in self if s.pk != pk] if pk is not None else list(self)\n        for key, value in kwargs.items():\n            if key.endswith(\"__isnull\"):\n                field = key[: -len(\"__isnull\")]\n                # exclude(field__isnull=True) keeps non-null rows.\n                if value:",
+        "detail": "mls.tests_public_submissions",
+        "documentation": {}
+    },
+    {
+        "label": "FakeValues",
+        "kind": 6,
+        "importPath": "mls.tests_public_submissions",
+        "description": "mls.tests_public_submissions",
+        "peekOfCode": "class FakeValues(list):\n    def distinct(self):\n        seen = []\n        for item in self:\n            if item not in seen:\n                seen.append(item)\n        return FakeValues(seen)\n    def order_by(self, *args):\n        return FakeValues(sorted(self, key=lambda value: str(value).lower()))\nclass SimilarTests(SimpleTestCase):",
         "detail": "mls.tests_public_submissions",
         "documentation": {}
     },
@@ -22316,6 +22601,15 @@
         "importPath": "mls.tests_public_submissions",
         "description": "mls.tests_public_submissions",
         "peekOfCode": "class SimilarTests(SimpleTestCase):\n    def rank(self, subject, others):\n        with mock.patch.object(views, \"_public_submissions\", return_value=FakeQS([subject, *others])):\n            return [s.pk for s in views.similar_public_submissions(subject, limit=4)]\n    def test_same_project_ranks_first(self):\n        subject = sub(1, project=9)\n        others = [sub(2, city=\"Vaughan\"), sub(3, city=\"Toronto\", project=9)]\n        self.assertEqual(self.rank(subject, others)[0], 3)\n    def test_excludes_self_other_purposes_and_unrelated(self):\n        subject = sub(1)",
+        "detail": "mls.tests_public_submissions",
+        "documentation": {}
+    },
+    {
+        "label": "AvailableCitiesTests",
+        "kind": 6,
+        "importPath": "mls.tests_public_submissions",
+        "description": "mls.tests_public_submissions",
+        "peekOfCode": "class AvailableCitiesTests(SimpleTestCase):\n    def test_dedupes_and_sorts_case_insensitively(self):\n        qs = FakeQS(\n            [\n                sub(1, city=\"Toronto\"),\n                sub(2, city=\"vaughan\"),\n                sub(3, city=\"Toronto\"),\n                sub(4, city=\"  \"),\n                sub(5, city=\"Mississauga\"),\n            ]",
         "detail": "mls.tests_public_submissions",
         "documentation": {}
     },
@@ -22333,7 +22627,7 @@
         "kind": 2,
         "importPath": "mls.tests_public_submissions",
         "description": "mls.tests_public_submissions",
-        "peekOfCode": "def sub(pk, city=\"Vaughan\", price=\"700000\", project=None, builder=\"\", purpose=\"assignment\"):\n    return SimpleNamespace(\n        pk=pk, city=city, asking_price=Decimal(price) if price else None,\n        precon_property_id=project, builder_name=builder, purpose=purpose,\n    )\nclass FakeQS(list):\n    def filter(self, **kwargs):\n        return FakeQS(s for s in self if all(getattr(s, k) == v for k, v in kwargs.items()))\n    def exclude(self, pk):\n        return FakeQS(s for s in self if s.pk != pk)",
+        "peekOfCode": "def sub(pk, city=\"Vaughan\", price=\"700000\", project=None, builder=\"\", purpose=\"assignment\"):\n    return SimpleNamespace(\n        pk=pk, city=city, asking_price=Decimal(price) if price else None,\n        precon_property_id=project, builder_name=builder, purpose=purpose,\n    )\nclass FakeQS(list):\n    def filter(self, **kwargs):\n        return FakeQS(s for s in self if all(getattr(s, k) == v for k, v in kwargs.items()))\n    def exclude(self, pk=None, **kwargs):\n        rows = [s for s in self if s.pk != pk] if pk is not None else list(self)",
         "detail": "mls.tests_public_submissions",
         "documentation": {}
     },
@@ -22711,7 +23005,7 @@
         "kind": 6,
         "importPath": "mls.views",
         "description": "mls.views",
-        "peekOfCode": "class PublicListingSubmissionListAPIView(APIView):\n    \"\"\"Approved non-MLS listings (scope #13: Exclusive Assignments).\n    Filters: purpose (sale|rent|assignment), city, price_min, price_max,\n    beds_min, precon_property. Paginated: page, page_size (max 48).\n    \"\"\"\n    permission_classes = [AllowAny]\n    MAX_PAGE_SIZE = 48\n    @extend_schema(tags=[\"Listing submissions\"], summary=\"List approved non-MLS listings\", auth=[])\n    def get(self, request):\n        queryset = _public_submissions()",
+        "peekOfCode": "class PublicListingSubmissionListAPIView(APIView):\n    \"\"\"Approved non-MLS listings (scope #13: Exclusive Assignments).\n    Filters: purpose (sale|rent|assignment), city, price_min, price_max,\n    beds_min, precon_property. Paginated: page, page_size (max 48).\n    Response always comes from the database (``source: \"database\"``). An empty\n    ``results`` array means there are no matching approved listings — clients\n    must show an empty state, never hardcoded sample cards.\n    \"\"\"\n    permission_classes = [AllowAny]\n    MAX_PAGE_SIZE = 48",
         "detail": "mls.views",
         "documentation": {}
     },
@@ -23877,6 +24171,15 @@
         "documentation": {}
     },
     {
+        "label": "PreComDealsAPIView",
+        "kind": 6,
+        "importPath": "mls.views_precon",
+        "description": "mls.views_precon",
+        "peekOfCode": "class PreComDealsAPIView(APIView):\n    \"\"\"Homepage Pre-Construction Deals rail.\n    GET /api/mls/precon-properties/deals/\n    Order: team pins (published, not sold out) → search-history matches\n    (cities + beds/baths/price) or near-visitor IP city → newest fill.\n    ``deal_source``: pinned | history | local | newest.\n    \"\"\"\n    permission_classes = [AllowAny]\n    @extend_schema(\n        tags=[\"Pre-construction\"],",
+        "detail": "mls.views_precon",
+        "documentation": {}
+    },
+    {
         "label": "PreComPropertyListAPIView",
         "kind": 6,
         "importPath": "mls.views_precon",
@@ -24295,7 +24598,7 @@
         "kind": 6,
         "importPath": "mls.views_valuation",
         "description": "mls.views_valuation",
-        "peekOfCode": "class ValuationEstimateAPIView(APIView):\n    permission_classes = [AllowAny]\n    def post(self, request):\n        try:\n            body = request.data if isinstance(request.data, dict) else json.loads(request.body or \"{}\")\n        except Exception:\n            return Response({\"detail\": \"Invalid JSON\"}, status=status.HTTP_400_BAD_REQUEST)\n        listing_key = (body.get(\"listing_key\") or \"\").strip() or None\n        prop = (\n            Property.objects.filter(listing_key=listing_key).prefetch_related(\"rooms\").first()",
+        "peekOfCode": "class ValuationEstimateAPIView(APIView):\n    permission_classes = [AllowAny]\n    def post(self, request):\n        try:\n            body = request.data if isinstance(request.data, dict) else json.loads(request.body or \"{}\")\n        except Exception:\n            return Response({\"detail\": \"Invalid JSON\"}, status=status.HTTP_400_BAD_REQUEST)\n        try:\n            return self._estimate(request, body)\n        except Exception:",
         "detail": "mls.views_valuation",
         "documentation": {}
     },
