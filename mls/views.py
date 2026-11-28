@@ -2340,18 +2340,31 @@ def _featured_has_search_history(params) -> bool:
     return False
 
 
-def _featured_history_qs(params, *, used_ids: set[int]):
-    """Active sale homes matching frontend last-search filter params."""
-    qs = _exclude_rentals(
-        Property.objects.filter(standard_status__iexact="active").exclude(INACTIVE_STATUS_Q)
-    ).exclude(id__in=used_ids)
+def _scalar_param(value):
+    """QueryDict → dict() yields list values; filters expect a single string/number."""
+    if isinstance(value, (list, tuple)):
+        return value[-1] if value else None
+    return value
 
-    # Map listing-page aliases onto query_helpers params.
-    filter_params = params.copy() if hasattr(params, "copy") else dict(params)
-    if hasattr(filter_params, "copy") and not isinstance(filter_params, dict):
-        filter_params = filter_params.copy()
+
+def _featured_filter_params(params) -> dict:
+    """Normalize request query params for featured history filtering.
+
+    ``dict(QueryDict)`` keeps values as lists, so ``int(baths_min)`` 500s.
+    Prefer QueryDict.dict() (last value per key) when available.
+    """
+    if hasattr(params, "dict") and callable(params.dict):
+        try:
+            raw = params.dict()
+        except Exception:
+            raw = {k: _scalar_param(params.get(k)) for k in params.keys()}
+    elif hasattr(params, "copy"):
+        copied = params.copy()
+        raw = copied.dict() if hasattr(copied, "dict") else dict(copied)
     else:
-        filter_params = dict(filter_params)
+        raw = dict(params)
+
+    filter_params = {k: _scalar_param(v) for k, v in raw.items()}
 
     if filter_params.get("cities") and not filter_params.get("city"):
         filter_params["city"] = filter_params.get("cities")
@@ -2365,6 +2378,16 @@ def _featured_history_qs(params, *, used_ids: set[int]):
         filter_params["building_area_max"] = filter_params.get("sqft_max")
     if not filter_params.get("transaction_type"):
         filter_params["transaction_type"] = "sale"
+    return filter_params
+
+
+def _featured_history_qs(params, *, used_ids: set[int]):
+    """Active sale homes matching frontend last-search filter params."""
+    qs = _exclude_rentals(
+        Property.objects.filter(standard_status__iexact="active").exclude(INACTIVE_STATUS_Q)
+    ).exclude(id__in=used_ids)
+
+    filter_params = _featured_filter_params(params)
 
     qs = _qh_apply_common_filters(
         qs,
@@ -2378,9 +2401,11 @@ def _featured_history_qs(params, *, used_ids: set[int]):
         qs = qs.filter(home_q)
     qs = apply_structure_filters(qs, filter_params)
 
-    style = (filter_params.get("architectural_style") or filter_params.get("style") or "").strip()
-    if style:
-        qs = qs.filter(architectural_style__icontains=style)
+    style = (
+        filter_params.get("architectural_style") or filter_params.get("style") or ""
+    )
+    if isinstance(style, str) and style.strip():
+        qs = qs.filter(architectural_style__icontains=style.strip())
     return qs
 
 
