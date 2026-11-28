@@ -244,18 +244,22 @@ def get_search_filters_schema() -> dict[str, Any]:
             "eliminate_tabs": True,
             "notes": (
                 "Keep the current search layout. Only remove Buy/Rent tabs and "
-                "the secondary For Sale / For Lease / Sold (etc.) tab strip. "
-                "Replace them with dropdowns: Transaction Type, Min Price, "
-                "Max Price, Beds, Baths. Put remaining filters in the existing "
-                "Filters sheet; sheet fields change by transaction_type "
-                "(sale vs rent vs sold), like REALTOR.ca."
+                "the secondary For Sale / For Lease / Sold (etc.) tab strip on "
+                "the listings/map search UI. Do NOT hide homepage Explore by "
+                "Property Type. Replace search tabs with dropdowns: Transaction "
+                "Type, Min Price, Max Price, Beds, Baths. Put remaining filters "
+                "in the existing Filters sheet; sheet fields change by "
+                "transaction_type (sale vs rent vs sold), like REALTOR.ca."
             ),
             "remove": [
-                "Buy tab",
-                "Rent tab",
+                "Buy tab (listings search only)",
+                "Rent tab (listings search only)",
                 "For Sale tab",
                 "For Lease / For Rent secondary tab",
                 "Sold / status tab strip under search",
+            ],
+            "keep": [
+                "Homepage Explore by Property Type section",
             ],
             "primary_controls": [
                 "transaction_type (dropdown)",
