@@ -43,9 +43,38 @@ class MediaSerializer(serializers.ModelSerializer):
 
 
 class RoomSerializer(serializers.ModelSerializer):
+    dimensions_display = serializers.SerializerMethodField()
+    dimensions_ft = serializers.SerializerMethodField()
+
     class Meta:
         model = Room
-        fields = ['room_type', 'room_level', 'room_length', 'room_width', 'room_dimensions']
+        fields = [
+            "room_type",
+            "room_level",
+            "room_length",
+            "room_width",
+            "room_dimensions",
+            "room_length_width_units",
+            "dimensions_display",
+            "dimensions_ft",
+        ]
+
+    def get_dimensions_display(self, obj):
+        from mls.services.room_dimensions import format_room_dimensions
+
+        return format_room_dimensions(
+            obj.room_length,
+            obj.room_width,
+            obj.room_length_width_units,
+            obj.room_dimensions,
+        )
+
+    def get_dimensions_ft(self, obj):
+        from mls.services.room_dimensions import _is_metric, meters_to_feet_display
+
+        if not _is_metric(obj.room_length_width_units):
+            return None
+        return meters_to_feet_display(obj.room_length, obj.room_width)
 
 
 # `to_attr` names for the batched lookups below. PropertySerializer reads
@@ -189,6 +218,14 @@ class PropertyDetailSerializer(serializers.ModelSerializer):
     rooms = RoomSerializer(many=True, read_only=True)
     media = serializers.SerializerMethodField()
     next_open_house = serializers.SerializerMethodField()
+    # Aliases that match the property-detail Key Facts labels (and REALM).
+    garage_spaces = serializers.SerializerMethodField()
+    garage_type = serializers.SerializerMethodField()
+    style = serializers.SerializerMethodField()
+    exterior = serializers.SerializerMethodField()
+    listing_brokerage = serializers.SerializerMethodField()
+    living_area_range = serializers.SerializerMethodField()
+    square_feet_above_ground = serializers.SerializerMethodField()
 
     class Meta:
         model = Property
@@ -210,6 +247,37 @@ class PropertyDetailSerializer(serializers.ModelSerializer):
             if url or has_file:
                 rows.append(item)
         return MediaSerializer(rows, many=True, context=self.context).data
+
+    def get_garage_spaces(self, obj):
+        return obj.garages
+
+    def get_garage_type(self, obj):
+        return (obj.garage_size or obj.parking_features or "").strip() or None
+
+    def get_style(self, obj):
+        return (obj.architectural_style or "").strip() or None
+
+    def get_exterior(self, obj):
+        return (obj.construction_materials or obj.exterior_features or "").strip() or None
+
+    def get_listing_brokerage(self, obj):
+        return (obj.list_office_name or "").strip() or None
+
+    def get_living_area_range(self, obj):
+        lo = obj.living_area_minimum
+        hi = obj.living_area_maximum
+        if lo is not None and hi is not None:
+            return f"{int(lo)}-{int(hi)}"
+        if lo is not None:
+            return f"{int(lo)}+"
+        if hi is not None:
+            return f"up to {int(hi)}"
+        return None
+
+    def get_square_feet_above_ground(self, obj):
+        if obj.above_grade_finished_area is not None:
+            return float(obj.above_grade_finished_area)
+        return None
 
 
 class UserFeedbackSerializer(serializers.ModelSerializer):

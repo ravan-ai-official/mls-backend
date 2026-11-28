@@ -38,6 +38,8 @@ class CompFilterTests(SimpleTestCase):
         from mls.services.valuation.comps import _city_prefix
 
         self.assertEqual(_city_prefix("Toronto C01"), "Toronto")
+        self.assertEqual(_city_prefix("Toronto (Annex)"), "Toronto")
+        self.assertEqual(_city_prefix("Oakville (CO Central)"), "Oakville")
         self.assertEqual(_city_prefix("Mississauga"), "Mississauga")
         self.assertEqual(_city_prefix("Richmond Hill"), "Richmond Hill")
 

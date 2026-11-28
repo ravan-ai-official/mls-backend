@@ -23,6 +23,10 @@ from .common import base_city, to_float
 MIN_DAYS_BETWEEN_SALES = 60
 # Losses beyond this are almost always a unit mismatch or a typo.
 MAX_LOSS_PCT = 45.0
+# Same guard for gains (Profitable Investments): unrealistic appreciation.
+MAX_GAIN_PCT = 45.0
+# Profitable Investments: both sales must fall inside this lookback.
+GAIN_LOOKBACK_DAYS = 365
 
 _SPACES = re.compile(r"\s+")
 _UNIT_WORDS = re.compile(r"\b(unit|suite|apt|apartment|#)\s*", re.IGNORECASE)
@@ -93,3 +97,82 @@ def find_repeat_sale_losses(rows: Iterable[dict[str, Any]]) -> list[RepeatSaleLo
             losses.append(loss)
     losses.sort(key=lambda loss: loss.close_date, reverse=True)
     return losses
+
+
+@dataclass(frozen=True)
+class RepeatSaleGain:
+    listing_key: str
+    address: str
+    city: str
+    property_sub_type: str
+    bedrooms: int | None
+    bathrooms: int | None
+    close_price: float
+    close_date: date
+    previous_close_price: float
+    previous_close_date: date
+
+    @property
+    def gain_pct(self) -> float:
+        return (self.close_price - self.previous_close_price) / self.previous_close_price * 100
+
+    @property
+    def gain_amount(self) -> float:
+        return self.close_price - self.previous_close_price
+
+
+def find_repeat_sale_gains(
+    rows: Iterable[dict[str, Any]],
+    *,
+    as_of: date | None = None,
+) -> list[RepeatSaleGain]:
+    """Homes sold 2+ times in the last 12 months where the latest price is higher.
+
+    Skips too-quick resales and unrealistically large gains (same odd-case
+    filters as repeat-sale losses, inverted for appreciation).
+    """
+    today = as_of or date.today()
+    window_start = today - timedelta(days=GAIN_LOOKBACK_DAYS)
+
+    by_address: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        key = normalise_address(row.get("UnparsedAddress"))
+        close_date = parse_date(row.get("CloseDate"))
+        if key and close_date and to_float(row.get("ClosePrice")):
+            by_address[key].append(row)
+
+    gains: list[RepeatSaleGain] = []
+    for sales in by_address.values():
+        recent = [
+            row
+            for row in sales
+            if (parse_date(row["CloseDate"]) or date.min) >= window_start
+        ]
+        if len(recent) < 2:
+            continue
+        recent.sort(key=lambda r: parse_date(r["CloseDate"]))
+        latest, previous = recent[-1], recent[-2]
+        latest_date = parse_date(latest["CloseDate"])
+        previous_date = parse_date(previous["CloseDate"])
+        if (latest_date - previous_date) < timedelta(days=MIN_DAYS_BETWEEN_SALES):
+            continue
+        latest_price = to_float(latest["ClosePrice"])
+        previous_price = to_float(previous["ClosePrice"])
+        if latest_price <= previous_price:
+            continue
+        gain = RepeatSaleGain(
+            listing_key=latest["ListingKey"],
+            address=(latest.get("UnparsedAddress") or "").split(",")[0].strip(),
+            city=base_city(latest.get("City")),
+            property_sub_type=latest.get("PropertySubType") or "",
+            bedrooms=latest.get("BedroomsTotal"),
+            bathrooms=latest.get("BathroomsTotalInteger"),
+            close_price=latest_price,
+            close_date=latest_date,
+            previous_close_price=previous_price,
+            previous_close_date=previous_date,
+        )
+        if gain.gain_pct <= MAX_GAIN_PCT:
+            gains.append(gain)
+    gains.sort(key=lambda g: (g.gain_pct, g.close_date), reverse=True)
+    return gains

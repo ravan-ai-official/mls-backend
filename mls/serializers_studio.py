@@ -63,8 +63,8 @@ class StudioPreconDetailSerializer(StudioPreconListSerializer):
 
 
 class AttachmentInputSerializer(serializers.Serializer):
-    # Attachment.url is a default URLField (200 chars).
-    url = serializers.URLField(max_length=200)
+    # Matches Attachment.url (Cloudinary delivery URLs often exceed 200 chars).
+    url = serializers.URLField(max_length=2000)
     title = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
     mime_type = serializers.CharField(max_length=100, required=False, allow_blank=True, default="")
 

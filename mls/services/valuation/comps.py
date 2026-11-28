@@ -69,7 +69,8 @@ AMPRE_CACHE_SECONDS = 60 * 60
 # One AMPRE page is enough to rank nearby sold comps; 800-row pulls routinely
 # blew past the browser/proxy timeout on home-evaluation.
 AMPRE_MAX_ROWS = 200
-AMPRE_REQUEST_TIMEOUT_SECONDS = 12
+# Home-evaluation FE allows ~55s; leave headroom for hedonic + AI after this pull.
+AMPRE_REQUEST_TIMEOUT_SECONDS = 20
 PRICING_K = 8
 ACTIVE_K = 5
 
@@ -186,13 +187,17 @@ def _days_on_market(close_date: Optional[str], entry_raw: Any) -> Optional[int]:
 def _city_prefix(city: Optional[str]) -> str:
     """Normalize MLS city labels for AMPRE ``startswith(City, ...)``.
 
-    Local rows sometimes store district-coded cities like ``Toronto C01``.
-    AMPRE matches on the same pattern, so querying the bare municipality
-    (``Toronto``) finds every district; querying ``Toronto C01`` finds almost none.
+    Local rows sometimes store district-coded cities like ``Toronto C01`` or
+    neighbourhood-qualified ``Toronto (Annex)``. AMPRE matches the bare
+    municipality best; querying the full local label finds almost nothing.
     """
     text = (city or "").strip()
     if not text:
         return ""
+    # "Toronto (Annex)" / "Oakville (CO Central)" → "Toronto" / "Oakville"
+    paren = re.match(r"^(.*?)\s*\(.*\)\s*$", text)
+    if paren and paren.group(1).strip():
+        text = paren.group(1).strip()
     m = re.match(r"^(.*?)\s+[CEWN]\d{2}\s*$", text, flags=re.IGNORECASE)
     if m and m.group(1).strip():
         return m.group(1).strip()
@@ -347,7 +352,13 @@ def _passes_filters(
     require_subtype: bool,
     max_age_days: int,
 ) -> bool:
-    if comp["distance_km"] > radius_km:
+    # Comps with unknown coordinates use a same-city placeholder distance; only
+    # apply the radius gate when we actually measured distance from lat/lng.
+    if comp.get("latitude") is not None and comp.get("longitude") is not None:
+        if comp["distance_km"] > radius_km:
+            return False
+    elif radius_km < 5.0:
+        # Keep tight first pass for measured neighbours only.
         return False
     if require_subtype and sub_type:
         ctype = _norm_subtype(comp.get("property_sub_type"))
@@ -385,34 +396,57 @@ def _score_comp(comp: Dict[str, Any], sub_sqft: Optional[float], sub_beds: Optio
     return (comp["distance_km"], bed_pen, sq_pen)
 
 
-def _select_ampre_sold(subject: Dict[str, Any], k: int = PRICING_K) -> List[Dict[str, Any]]:
-    lat = subject.get("latitude")
-    lng = subject.get("longitude")
-    city = _city_prefix(subject.get("city"))
-    if lat is None or lng is None or not city:
-        return []
-    try:
-        slat, slng = float(lat), float(lng)
-    except (TypeError, ValueError):
-        return []
+def _enrich_comp_coords_from_local(
+    comps: List[Dict[str, Any]],
+    slat: float,
+    slng: float,
+) -> None:
+    """Fill missing lat/lng (and distance) from the local catalogue by listing_key.
 
+    AMPRE sold $select omits coordinates (unknown fields 400 the whole query),
+    so without this every sold row looks ~4 km away and tight WOWA passes drop
+    them — which emptied the comparables table whenever sold_proxy was thin.
+    """
+    keys = [
+        c.get("listing_key")
+        for c in comps
+        if c.get("listing_key") and (c.get("latitude") is None or c.get("longitude") is None)
+    ]
+    if not keys:
+        return
+    local = {
+        row.listing_key: row
+        for row in Property.objects.filter(
+            listing_key__in=keys,
+            latitude__isnull=False,
+            longitude__isnull=False,
+        ).only("listing_key", "latitude", "longitude")
+    }
+    for comp in comps:
+        key = comp.get("listing_key")
+        row = local.get(key) if key else None
+        if row is None:
+            continue
+        try:
+            clat, clng = float(row.latitude), float(row.longitude)
+        except (TypeError, ValueError):
+            continue
+        comp["latitude"] = clat
+        comp["longitude"] = clng
+        comp["distance_km"] = round(haversine_km(slat, slng, clat, clng), 3)
+
+
+def _rank_sold_candidates(
+    candidates: List[Dict[str, Any]],
+    subject: Dict[str, Any],
+    k: int,
+) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
     sub_sqft = _subject_sqft(subject)
     sub_beds = _subject_beds(subject)
     sub_year = _subject_year(subject)
     sub_type = _norm_subtype(subject.get("property_sub_type"))
-    subtype_prefix = (subject.get("property_sub_type") or "").strip() or None
-
-    # Fetch the widest window once; filter per pass locally.
-    raw = _fetch_ampre_sold_rows(city, max_age_days=730, subtype=None)
-    if not raw and subtype_prefix:
-        raw = _fetch_ampre_sold_rows(city, max_age_days=730, subtype=subtype_prefix[:30])
-    candidates = []
-    for row in raw:
-        comp = _ampre_row_to_comp(row, slat, slng)
-        if comp:
-            candidates.append(comp)
-    if not candidates:
-        return []
 
     best: List[Dict[str, Any]] = []
     for sqft_tol, age_years, max_age_days, radius_km, require_subtype, min_comps in WOWA_PASSES:
@@ -439,9 +473,106 @@ def _select_ampre_sold(subject: Dict[str, Any], k: int = PRICING_K) -> List[Dict
             return filtered[:k]
 
     if not best:
-        candidates.sort(key=lambda c: c["distance_km"])
+        candidates.sort(key=lambda c: c.get("distance_km") or 99)
         return candidates[:k]
     return best[:k]
+
+
+def _select_ampre_sold(subject: Dict[str, Any], k: int = PRICING_K) -> List[Dict[str, Any]]:
+    lat = subject.get("latitude")
+    lng = subject.get("longitude")
+    city = _city_prefix(subject.get("city"))
+    if lat is None or lng is None or not city:
+        return []
+    try:
+        slat, slng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return []
+
+    subtype_prefix = (subject.get("property_sub_type") or "").strip() or None
+
+    # Fetch the widest window once; filter per pass locally.
+    raw = _fetch_ampre_sold_rows(city, max_age_days=730, subtype=None)
+    if not raw and subtype_prefix:
+        raw = _fetch_ampre_sold_rows(city, max_age_days=730, subtype=subtype_prefix[:30])
+    candidates = []
+    for row in raw:
+        comp = _ampre_row_to_comp(row, slat, slng)
+        if comp:
+            candidates.append(comp)
+    if not candidates:
+        return []
+
+    _enrich_comp_coords_from_local(candidates, slat, slng)
+    return _rank_sold_candidates(candidates, subject, k)
+
+
+def _select_local_closed(subject: Dict[str, Any], k: int = PRICING_K) -> List[Dict[str, Any]]:
+    """Closed catalogue rows with a real ClosePrice — fills the table when AMPRE is thin."""
+    lat = subject.get("latitude")
+    lng = subject.get("longitude")
+    if lat is None or lng is None:
+        return []
+    try:
+        slat, slng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return []
+
+    cutoff = timezone.now().date() - timedelta(days=730)
+    qs = Property.objects.filter(
+        standard_status__iexact="Closed",
+        close_price__isnull=False,
+        close_price__gt=0,
+        close_date__isnull=False,
+        close_date__gte=cutoff,
+        latitude__isnull=False,
+        longitude__isnull=False,
+    ).exclude(Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0))
+
+    city = _city_prefix(subject.get("city"))
+    if city:
+        qs = qs.filter(Q(city__istartswith=city) | Q(city__iexact=city))
+
+    candidates: List[Dict[str, Any]] = []
+    for row in qs.iterator(chunk_size=400):
+        try:
+            price = float(row.close_price)
+            clat, clng = float(row.latitude), float(row.longitude)
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        living = None
+        if row.living_area:
+            living = float(row.living_area)
+        elif row.above_grade_finished_area:
+            living = float(row.above_grade_finished_area)
+        candidates.append(
+            {
+                "listing_key": row.listing_key,
+                "price": price,
+                "close_price": price,
+                "list_price": float(row.list_price) if row.list_price else None,
+                "latitude": clat,
+                "longitude": clng,
+                "bedrooms_total": row.bedrooms_total,
+                "bathrooms_total_integer": row.bathrooms_total_integer,
+                "living_area": living,
+                "year_built": row.year_built,
+                "parking_total": row.parking_total,
+                "tax_annual_amount": float(row.tax_annual_amount) if row.tax_annual_amount else None,
+                "lot_area": float(row.lot_size_area) if row.lot_size_area else None,
+                "property_sub_type": row.property_sub_type,
+                "unparsed_address": row.unparsed_address,
+                "city": row.city,
+                "city_region": row.city_region or "",
+                "distance_km": round(haversine_km(slat, slng, clat, clng), 3),
+                "source": "sold",
+                "event_date": row.close_date.isoformat() if row.close_date else None,
+                "days_on_market": None,
+            }
+        )
+    return _rank_sold_candidates(candidates, subject, k)
 
 
 def _select_sold_proxy(subject: Dict[str, Any], k: int = PRICING_K) -> List[Dict[str, Any]]:
@@ -487,12 +618,14 @@ def _select_sold_proxy(subject: Dict[str, Any], k: int = PRICING_K) -> List[Dict
             if sub_beds is not None and row.bedrooms_total is not None:
                 if abs(row.bedrooms_total - sub_beds) > 1:
                     continue
+            last_ask = float(row.last_list_price)
             batch.append(
                 {
                     "listing_key": row.listing_key,
-                    "price": float(row.last_list_price),
-                    "close_price": None,
-                    "list_price": float(row.last_list_price),
+                    "price": last_ask,
+                    # Table UIs bind to close_price; use last ask so the column is not blank.
+                    "close_price": last_ask,
+                    "list_price": last_ask,
                     "latitude": float(row.latitude),
                     "longitude": float(row.longitude),
                     "bedrooms_total": row.bedrooms_total,
@@ -609,30 +742,41 @@ def select_comps(
     max_age_days: int = 180,
     k: int = PRICING_K,
 ) -> List[Dict[str, Any]]:
-    """Sold comparables only: AMPRE ClosePrice first, then sold_proxy.
+    """Sold comparables only for the AVM comparison table.
 
+    Order: AMPRE ClosePrice → local Closed catalogue → sold_proxy last-ask.
     Active for-sale listings belong in ``select_active_comps`` (suggestion
-    cards), never in the sold-comparison table. Hedonic pricing can still use
-    active listings via ``pricing_comps(..., active_comps)`` when solds are thin.
+    cards), never in this table. Hedonic pricing can still use actives via
+    ``pricing_comps(..., active_comps)`` when solds are thin.
 
     ``radius_km`` / ``max_age_days`` are retained for call-site compatibility;
     WOWA progressive passes own the real thresholds.
     """
     del radius_km, max_age_days  # unused; kept for signature compatibility
     sold = _select_ampre_sold(subject, k=k)
-    if len(sold) >= 3:
-        return sold
-
     existing = {c.get("listing_key") for c in sold if c.get("listing_key")}
-    for proxy in _select_sold_proxy(subject, k=k):
-        key = proxy.get("listing_key")
-        if key and key in existing:
-            continue
-        sold.append(proxy)
-        if key:
-            existing.add(key)
-        if len(sold) >= k:
-            break
+
+    if len(sold) < 3:
+        for local in _select_local_closed(subject, k=k):
+            key = local.get("listing_key")
+            if key and key in existing:
+                continue
+            sold.append(local)
+            if key:
+                existing.add(key)
+            if len(sold) >= k:
+                break
+
+    if len(sold) < 3:
+        for proxy in _select_sold_proxy(subject, k=k):
+            key = proxy.get("listing_key")
+            if key and key in existing:
+                continue
+            sold.append(proxy)
+            if key:
+                existing.add(key)
+            if len(sold) >= k:
+                break
 
     sold.sort(key=lambda c: c.get("distance_km") or 99)
     return sold[:k]

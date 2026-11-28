@@ -1581,17 +1581,23 @@ class RecommendationTrackAPIView(APIView):
 class PropertyTypesAPIView(APIView):
     """
     GET /api/mls/properties/property-types/
-    Returns UI home-type counts (Detached / Semi-Detached / Townhome / Condo)
-    plus Luxury ($2M+ active sales) and Rental (active leases). Optional:
+    Returns UI home-type counts for Explore by Property Type, in display order:
+    Detached, Semi-Detached, Townhome, Condo, Luxury (>3500 sq ft living area),
+    Open Houses (active listings with an upcoming open house). Optional:
       - province (comma-separated province codes, e.g. ON,QC)
       - listing_type: all | exclusive | lease | precon | community
     """
 
     def get(self, request):
-        from mls.services.query_helpers import HOME_TYPE_Q
+        from mls.services.query_helpers import (
+            HOME_TYPE_Q,
+            luxury_sqft_q,
+            with_effective_sqft,
+        )
 
         params = request.query_params
-        cache_key = _build_query_params_cache_key("property-types-ui", params)
+        # v3: Open Houses replaces Rental; Semi-Detached stays #2.
+        cache_key = _build_query_params_cache_key("property-types-ui-v3", params)
         cached_payload = cache.get(cache_key)
         if cached_payload is not None:
             return Response(cached_payload, status=status.HTTP_200_OK)
@@ -1620,14 +1626,13 @@ class PropertyTypesAPIView(APIView):
                 Q(intro__contains="exclusive") | Q(category_type=Property.EXCLUSIVE)
             )
 
-        sale_qs = qs.filter(
-            standard_status__iexact="Active",
-            list_price__gt=0,
-            lease_amount__isnull=True,
-            total_actual_rent__isnull=True,
-        )
-        rental_qs = qs.filter(standard_status__iexact="Active").filter(
-            Q(lease_amount__gt=0) | Q(total_actual_rent__gt=0)
+        sale_qs = with_effective_sqft(
+            qs.filter(
+                standard_status__iexact="Active",
+                list_price__gt=0,
+                lease_amount__isnull=True,
+                total_actual_rent__isnull=True,
+            )
         )
 
         counts = sale_qs.aggregate(
@@ -1635,9 +1640,14 @@ class PropertyTypesAPIView(APIView):
             semi=Count("id", filter=HOME_TYPE_Q["semi"]),
             townhome=Count("id", filter=HOME_TYPE_Q["townhouse"]),
             condo=Count("id", filter=HOME_TYPE_Q["condo"]),
-            luxury=Count("id", filter=Q(list_price__gte=2_000_000)),
+            luxury=Count("id", filter=luxury_sqft_q()),
         )
-        rental_count = rental_qs.count()
+        open_house_count = (
+            qs.filter(standard_status__iexact="Active")
+            .filter(open_houses__date__gte=timezone.localdate())
+            .distinct()
+            .count()
+        )
 
         results = [
             {
@@ -1671,10 +1681,10 @@ class PropertyTypesAPIView(APIView):
                 "ui_type": "Luxury",
             },
             {
-                "value": "Rental",
-                "label": "Rental",
-                "count": rental_count,
-                "ui_type": "Rental",
+                "value": "Open Houses",
+                "label": "Open Houses",
+                "count": open_house_count,
+                "ui_type": "Open Houses",
             },
         ]
 
@@ -2195,7 +2205,9 @@ FEATURED_CACHE_TTL_SECONDS = int(os.environ.get("FEATURED_CACHE_TTL_SECONDS", "3
 # Curated no-history fill: newer builds only (calendar year window).
 FEATURED_CURATED_MAX_AGE_YEARS = 5
 FEATURED_CURATED_MIN_SQFT = 2000
+FEATURED_HOMEPAGE_LIMIT = 3
 FEATURED_DEFAULT_LIMIT = 12
+FEATURED_MAX_LIMIT = 48
 FEATURED_HISTORY_PARAM_KEYS = frozenset(
     {
         "cities",
@@ -2355,9 +2367,11 @@ class FeaturedPropertiesAPIView(APIView):
     """
     GET /api/mls/properties/featured-properties/
 
-    Homepage Featured rail: admin pins first; then either last-search matches
+    Featured rail / page: admin pins first; then either last-search matches
     (history) or near-visitor + curated defaults; then exclusive fill.
-    Sold, de-listed, and rentals are left out. Default rail size is 12.
+    Sold, de-listed, and rentals are left out.
+    Homepage uses limit=3; /featured-listings view-all uses a higher limit
+    (up to FEATURED_MAX_LIMIT) with the same staging logic.
     """
 
     @extend_schema(
@@ -2367,10 +2381,17 @@ class FeaturedPropertiesAPIView(APIView):
             "(history) or IP/local + curated defaults (new 0–5 yr detached/semi/"
             "town, 2-storey, >2000 above-ground sqft, price low→high), then "
             "exclusive. Rentals never appear. featured_source: pinned | history | "
-            "local | curated | exclusive."
+            "local | curated | exclusive. Homepage rail: limit=3; view-all page: "
+            f"higher limit up to {FEATURED_MAX_LIMIT}."
         ),
         parameters=[
-            OpenApiParameter("limit", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Rail size, 1–24. Defaults to 12."),
+            OpenApiParameter(
+                "limit",
+                OpenApiTypes.INT,
+                OpenApiParameter.QUERY,
+                required=False,
+                description=f"Result size, 1–{FEATURED_MAX_LIMIT}. Defaults to {FEATURED_DEFAULT_LIMIT}. Homepage uses 3.",
+            ),
             OpenApiParameter("fill", OpenApiTypes.BOOL, OpenApiParameter.QUERY, required=False, description="Top up after pins. Defaults to true."),
             OpenApiParameter("cities", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False, description="CSV of preferred cities from search history."),
             OpenApiParameter("city", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False, description="Single preferred city."),
@@ -2395,7 +2416,10 @@ class FeaturedPropertiesAPIView(APIView):
         try:
             limit = max(
                 1,
-                min(int(request.query_params.get("limit", FEATURED_DEFAULT_LIMIT)), 24),
+                min(
+                    int(request.query_params.get("limit", FEATURED_DEFAULT_LIMIT)),
+                    FEATURED_MAX_LIMIT,
+                ),
             )
         except (TypeError, ValueError):
             return Response({"error": "limit must be an integer."}, status=400)

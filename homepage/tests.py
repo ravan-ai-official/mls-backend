@@ -24,8 +24,16 @@ from homepage.services.rent_estimates import (
     investor_metrics,
     rank_candidates,
 )
-from homepage.services.feeds import _has_sold_below_image, _is_complete_sold_below_row
-from homepage.services.sold_below import find_repeat_sale_losses, normalise_address
+from homepage.services.feeds import (
+    _has_sold_below_image,
+    _is_complete_profitable_row,
+    _is_complete_sold_below_row,
+)
+from homepage.services.sold_below import (
+    find_repeat_sale_gains,
+    find_repeat_sale_losses,
+    normalise_address,
+)
 
 
 class CommonTests(SimpleTestCase):
@@ -159,6 +167,35 @@ class SoldBelowTests(SimpleTestCase):
         ]
         self.assertEqual(find_repeat_sale_losses(rows), [])
 
+    def test_finds_gain_on_resale_within_12_months(self):
+        as_of = date(2026, 11, 27)
+        rows = [
+            self.sale("old", "20 Maple St, Oakville, ON", 900_000, "2026-02-01"),
+            self.sale("new", "20 MAPLE ST, Oakville, ON", 1_050_000, "2026-09-01"),
+            self.sale("loss", "22 Maple St, Oakville, ON", 800_000, "2026-03-01"),
+            self.sale("loss2", "22 Maple St, Oakville, ON", 700_000, "2026-10-01"),
+        ]
+        gains = find_repeat_sale_gains(rows, as_of=as_of)
+        self.assertEqual(len(gains), 1)
+        self.assertEqual(gains[0].listing_key, "new")
+        self.assertEqual(gains[0].previous_close_price, 900_000)
+        self.assertEqual(gains[0].gain_amount, 150_000)
+
+    def test_gains_skip_outside_window_quick_resale_and_huge_pct(self):
+        as_of = date(2026, 11, 27)
+        rows = [
+            # Previous sale outside 12-month window → not "sold twice in last 12 months"
+            self.sale("old1", "1 Pine Rd, Oakville", 800_000, "2025-01-01"),
+            self.sale("new1", "1 Pine Rd, Oakville", 900_000, "2026-10-01"),
+            # Too-quick resale
+            self.sale("q1", "2 Pine Rd, Oakville", 800_000, "2026-09-01"),
+            self.sale("q2", "2 Pine Rd, Oakville", 880_000, "2026-09-20"),
+            # Unrealistic gain (>45%)
+            self.sale("h1", "3 Pine Rd, Oakville", 500_000, "2026-02-01"),
+            self.sale("h2", "3 Pine Rd, Oakville", 900_000, "2026-10-01"),
+        ]
+        self.assertEqual(find_repeat_sale_gains(rows, as_of=as_of), [])
+
     def test_complete_sold_below_row_rejects_placeholders(self):
         valid = {
             "listing_key": "k1",
@@ -181,6 +218,27 @@ class SoldBelowTests(SimpleTestCase):
         self.assertFalse(_has_sold_below_image({**valid, "image_url": "  "}))
         self.assertTrue(
             _has_sold_below_image({**valid, "image_url": "https://cdn.example/a.jpg"})
+        )
+
+    def test_complete_profitable_row_requires_positive_gain(self):
+        valid = {
+            "listing_key": "k2",
+            "address": "20 Maple St",
+            "city": "Oakville",
+            "close_price": 1_050_000,
+            "close_date": "2026-09-01",
+            "previous_close_price": 900_000,
+            "previous_close_date": "2026-02-01",
+            "gain_amount": 150_000,
+        }
+        self.assertTrue(_is_complete_profitable_row(valid))
+        self.assertFalse(
+            _is_complete_profitable_row({**valid, "gain_amount": 0})
+        )
+        self.assertFalse(
+            _is_complete_profitable_row(
+                {**valid, "close_price": 800_000, "gain_amount": 100_000}
+            )
         )
 
 

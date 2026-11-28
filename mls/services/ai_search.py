@@ -90,7 +90,7 @@ Rules:
 - transaction: "rent"/"lease"/"for rent" or a monthly price = rent (prices are then monthly rent); buying = sale; otherwise null.
 - listing_status: "sold"/"recently sold" = sold; otherwise null.
 - property_type: detached house = Detached; semi = Semi-Detached; townhouse/townhome/row house = Townhome; condo/apartment/loft = Condo. A generic "house"/"home"/"place" = null.
-- "luxury" with no price given: price_min 2000000.
+- "luxury" with no size given: sqft_min 3501 (living area more than 3500 sq ft). Do not set a price floor for luxury.
 - beds_min / baths_min: "3 bed", "3+ bedrooms", "at least 3 beds" = 3. "2 bath" = 2.
 - city: a GTA municipality (Toronto, Mississauga, Brampton, Vaughan, Markham, Oakville, Richmond Hill, Pickering, Ajax, Whitby, Oshawa, Milton, Burlington, ...). A Toronto neighbourhood (e.g. Leslieville, Yorkville, North York, Scarborough) -> city Toronto and the neighbourhood in keywords.
 - postal_codes: Canadian postal codes or FSAs written in the request (e.g. "L7A", "M5V 2T6").

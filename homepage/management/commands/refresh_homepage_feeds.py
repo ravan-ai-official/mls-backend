@@ -8,7 +8,9 @@ from homepage.services.feeds import refresh_market_snapshot
 JOBS = {
     "news": news.ingest_all,
     "market": lambda: bool(refresh_market_snapshot()),
+    # Rebuilds Sold Below + Profitable Investments from the same AMPRE pull.
     "sold-below": jobs.refresh_sold_below_purchase,
+    "profitable-investments": jobs.refresh_profitable_investments,
     "nearby-alerts": subscriptions.send_nearby_alerts,
 }
 

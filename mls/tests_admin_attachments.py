@@ -53,9 +53,13 @@ class AttachmentAdminFormTests(TestCase):
         )
 
     @override_settings(PRECON_ASSET_STORAGE_CONFIGURED=True, PRECON_ASSET_MAX_UPLOAD_MB=25)
-    @patch("mls.admin.cloudinary_uploader.upload")
-    def test_uploads_an_asset_to_cloudinary_and_saves_its_delivery_url(self, upload):
-        upload.return_value = {"secure_url": "https://res.cloudinary.com/example/image/upload/project.webp"}
+    @patch("mls.admin.upload_precon_asset")
+    @patch("mls.admin.precon_asset_storage_configured", return_value=True)
+    def test_uploads_an_asset_to_cloudinary_and_saves_its_delivery_url(
+        self, _configured, upload_precon_asset
+    ):
+        delivery = "https://res.cloudinary.com/example/image/upload/v1/precon/uploads/project.webp"
+        upload_precon_asset.return_value = delivery
         form = AttachmentAdminForm(
             data={
                 "content": self.content.pk,
@@ -72,6 +76,25 @@ class AttachmentAdminFormTests(TestCase):
 
         self.assertTrue(form.is_valid(), form.errors)
         attachment = form.save()
-        self.assertEqual(attachment.url, upload.return_value["secure_url"])
+        self.assertEqual(attachment.url, delivery)
         self.assertEqual(attachment.mime_type, "image/webp")
-        upload.assert_called_once()
+        upload_precon_asset.assert_called_once()
+
+    @override_settings(PRECON_ASSET_STORAGE_CONFIGURED=False, PRECON_ASSET_MAX_UPLOAD_MB=25)
+    @patch("mls.admin.precon_asset_storage_configured", return_value=False)
+    def test_blocks_upload_when_cloudinary_is_missing(self, _configured):
+        form = AttachmentAdminForm(
+            data={
+                "content": self.content.pk,
+                "url": "",
+                "mime_type": "",
+                "title": "Project rendering",
+            },
+            files={
+                "upload": SimpleUploadedFile(
+                    "project.webp", b"test-image", content_type="image/webp"
+                ),
+            },
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("upload", form.errors)

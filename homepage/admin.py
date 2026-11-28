@@ -10,6 +10,7 @@ from .models import (
     NewsletterSubscriber,
     NewsSource,
     Partner,
+    ProfitableInvestment,
     SiteContent,
     SiteContentRevision,
     SoldBelowPurchase,
@@ -122,6 +123,29 @@ class NearbyAlertAdmin(admin.ModelAdmin):
 
 @admin.register(SoldBelowPurchase)
 class SoldBelowPurchaseAdmin(admin.ModelAdmin):
+    list_display = (
+        "address",
+        "city",
+        "property_sub_type",
+        "bedrooms",
+        "bathrooms",
+        "close_price",
+        "previous_close_price",
+        "close_date",
+        "previous_close_date",
+    )
+    list_filter = ("city", "property_sub_type", "close_date")
+    search_fields = ("address", "city", "listing_key", "property_sub_type")
+    readonly_fields = ("computed_at",)
+    date_hierarchy = "close_date"
+    ordering = ("-close_date",)
+
+    def has_add_permission(self, request):
+        return False  # computed by refresh_homepage_feeds
+
+
+@admin.register(ProfitableInvestment)
+class ProfitableInvestmentAdmin(admin.ModelAdmin):
     list_display = (
         "address",
         "city",

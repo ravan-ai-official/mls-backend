@@ -21,7 +21,14 @@ from rest_framework.views import APIView
 from vlog.permissions import IsStaffUser
 
 from .models import SiteContent, SiteContentRevision
-from .site_content import KEYS, SCHEMA_VERSION, SiteValidationError, default_documents, validate_document
+from .site_content import (
+    KEYS,
+    SCHEMA_VERSION,
+    SiteValidationError,
+    default_documents,
+    inject_missing_homepage_sections,
+    validate_document,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +108,10 @@ class PublicSiteContentView(APIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         ensure_documents()
         row = get_object_or_404(SiteContent, key=key)
-        return Response({"key": row.key, "document": row.published, "published_at": _stamp(row.published_at)})
+        document = row.published
+        if key == "homepage":
+            document = inject_missing_homepage_sections(document)
+        return Response({"key": row.key, "document": document, "published_at": _stamp(row.published_at)})
 
 
 class StudioSiteContentView(APIView):
@@ -111,7 +121,12 @@ class StudioSiteContentView(APIView):
         if key not in KEYS:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         ensure_documents()
-        return Response(_payload(get_object_or_404(SiteContent, key=key)))
+        row = get_object_or_404(SiteContent, key=key)
+        payload = _payload(row)
+        if key == "homepage":
+            payload["draft"] = inject_missing_homepage_sections(payload["draft"])
+            payload["published"] = inject_missing_homepage_sections(payload["published"])
+        return Response(payload)
 
     def put(self, request, key: str):
         if key not in KEYS:
@@ -258,9 +273,16 @@ class StudioSiteMediaView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         upload.seek(0)
-        if not getattr(settings, "PRECON_ASSET_STORAGE_CONFIGURED", False):
+        from mls.services.precon_assets import precon_asset_storage_configured
+
+        if not precon_asset_storage_configured():
             return Response(
-                {"detail": "File storage is not configured on the server."},
+                {
+                    "detail": (
+                        "Cloudinary is not configured on the server. "
+                        "Set CLOUDINARY_URL or cloud name + API key + secret."
+                    )
+                },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         try:

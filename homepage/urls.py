@@ -14,6 +14,7 @@ urlpatterns = [
     path("investor-picks/", views.InvestorPicksView.as_view(), name="investor-picks"),
     path("deals/", views.MarketDealsView.as_view(), name="deals"),
     path("sold-below-purchase/", views.SoldBelowPurchaseView.as_view(), name="sold-below-purchase"),
+    path("profitable-investments/", views.ProfitableInvestmentsView.as_view(), name="profitable-investments"),
     path("market-snapshot/", views.MarketSnapshotView.as_view(), name="market-snapshot"),
     path("nearby-activity/", views.NearbyActivityView.as_view(), name="nearby-activity"),
     path("neighbour-activity/", views.NeighbourActivityView.as_view(), name="neighbour-activity"),

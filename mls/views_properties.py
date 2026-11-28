@@ -27,6 +27,7 @@ from .services.query_helpers import (
     home_type_q,
     is_delisted_status,
     viewer_can_see_delisted,
+    with_effective_sqft,
 )
 from .views import (
     MAP_VIEW_CACHE_TTL_SECONDS,
@@ -93,8 +94,20 @@ class PropertyFilterView(APIView):
             OpenApiParameter("beds_min", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Minimum bedrooms_total."),
             OpenApiParameter("baths_min", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Minimum bathrooms_total_integer."),
             OpenApiParameter("property_sub_type", OpenApiTypes.STR, OpenApiParameter.QUERY, required=False, description="Repeatable. Comma-separated or repeated param values (e.g. 'Detached,Condo Apartment')."),
-            OpenApiParameter("sqft_min", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Minimum building_area_total."),
-            OpenApiParameter("sqft_max", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Maximum building_area_total."),
+            OpenApiParameter(
+                "sqft_min",
+                OpenApiTypes.INT,
+                OpenApiParameter.QUERY,
+                required=False,
+                description="Minimum living area (above-grade → living_area → building_area_total).",
+            ),
+            OpenApiParameter(
+                "sqft_max",
+                OpenApiTypes.INT,
+                OpenApiParameter.QUERY,
+                required=False,
+                description="Maximum living area (above-grade → living_area → building_area_total).",
+            ),
             OpenApiParameter("year_built_min", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Minimum year_built."),
             OpenApiParameter("garages_min", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Minimum garage / parking spaces."),
             OpenApiParameter("stories_min", OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description="Minimum number of floors/stories."),
@@ -159,10 +172,12 @@ class PropertyFilterView(APIView):
                 qs = qs.filter(bedrooms_total__gte=int(request.GET.get("beds_min")))
             if request.GET.get("baths_min"):
                 qs = qs.filter(bathrooms_total_integer__gte=int(request.GET.get("baths_min")))
-            if request.GET.get("sqft_min"):
-                qs = qs.filter(building_area_total__gte=int(request.GET.get("sqft_min")))
-            if request.GET.get("sqft_max"):
-                qs = qs.filter(building_area_total__lte=int(request.GET.get("sqft_max")))
+            if request.GET.get("sqft_min") or request.GET.get("sqft_max"):
+                qs = with_effective_sqft(qs)
+                if request.GET.get("sqft_min"):
+                    qs = qs.filter(effective_sqft__gte=int(request.GET.get("sqft_min")))
+                if request.GET.get("sqft_max"):
+                    qs = qs.filter(effective_sqft__lte=int(request.GET.get("sqft_max")))
             if request.GET.get("year_built_min"):
                 qs = qs.filter(year_built__gte=int(request.GET.get("year_built_min")))
             if request.GET.get("year_built_max"):

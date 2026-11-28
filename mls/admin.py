@@ -3,7 +3,6 @@ import mimetypes
 import uuid
 from urllib.parse import urlparse
 
-from cloudinary import uploader as cloudinary_uploader
 from cloudinary.exceptions import Error as CloudinaryError
 from django.conf import settings
 from django.contrib import admin
@@ -12,6 +11,10 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
+from .services.precon_assets import (
+    precon_asset_storage_configured,
+    upload_precon_asset,
+)
 from .models import (
     AccessToken,
     Agent,
@@ -251,25 +254,32 @@ class AttachmentAdminForm(forms.ModelForm):
             raise ValidationError("Provide an external URL or upload an image or PDF.")
 
         if upload:
-            if not settings.PRECON_ASSET_STORAGE_CONFIGURED:
-                self.add_error("upload", "Cloudinary must be configured before uploading project assets.")
+            if not precon_asset_storage_configured():
+                self.add_error(
+                    "upload",
+                    "Cloudinary must be configured before uploading project assets. "
+                    "Set CLOUDINARY_URL (or cloud name + API key + secret) in the "
+                    "server environment or the admin Integrations console.",
+                )
                 return cleaned_data
-            mime_type = self._validate_upload(upload)
             try:
-                uploaded = cloudinary_uploader.upload(
+                mime_type = self._validate_upload(upload)
+            except ValidationError as exc:
+                self.add_error("upload", exc.messages[0] if exc.messages else exc)
+                return cleaned_data
+            try:
+                self._uploaded_asset_url = upload_precon_asset(
                     upload,
-                    resource_type="auto",
                     folder=f"precon/{self.instance.content_id or 'uploads'}",
-                    use_filename=True,
-                    unique_filename=True,
                 )
             except CloudinaryError:
                 self.add_error("upload", "Cloudinary could not store this file. Please try again.")
                 return cleaned_data
-
-            self._uploaded_asset_url = str(uploaded.get("secure_url") or "")
-            if not self._uploaded_asset_url:
-                self.add_error("upload", "Cloudinary did not return a delivery URL for this file.")
+            except RuntimeError:
+                self.add_error(
+                    "upload",
+                    "Cloudinary must be configured before uploading project assets.",
+                )
                 return cleaned_data
             cleaned_data["url"] = self._uploaded_asset_url
             cleaned_data["mime_type"] = mime_type
@@ -695,6 +705,12 @@ class ContentAdmin(admin.ModelAdmin):
         }),
         ("Writing", {"fields": ("content", "excerpt")}),
     )
+
+    class Media:
+        # Ensure attachment upload styling/JS loads on the Content change form
+        # (inlines alone do not always pull widget Media in every admin skin).
+        css = {"all": ("admin/css/precon-asset-upload.css",)}
+        js = ("admin/js/precon-asset-upload.js",)
 
     def save_related(self, request, form, formsets, change):
         """Warn editors when a published project cannot reach the public list."""

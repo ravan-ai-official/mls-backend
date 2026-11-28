@@ -592,6 +592,266 @@ def sold_below_purchase(
 
 
 # --------------------------------------------------------------------------
+# Profitable Investments (repeat sales that closed above previous purchase)
+# --------------------------------------------------------------------------
+
+
+def _profitable_row(
+    *,
+    listing_key: str,
+    address: str,
+    city: str,
+    property_sub_type: str | None,
+    bedrooms: int | None,
+    bathrooms: int | None,
+    close_price: float,
+    close_date: str,
+    previous_close_price: float,
+    previous_close_date: str,
+    gain_amount: float,
+    image_url: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "listing_key": listing_key,
+        "address": address,
+        "city": city,
+        "property_sub_type": property_sub_type or "",
+        "bedrooms": bedrooms,
+        "bathrooms": bathrooms,
+        "close_price": close_price,
+        "close_date": close_date,
+        "previous_close_price": previous_close_price,
+        "previous_close_date": previous_close_date,
+        "gain_amount": gain_amount,
+        "image_url": image_url,
+    }
+
+
+def _is_complete_profitable_row(row: dict[str, Any]) -> bool:
+    try:
+        close_price = float(row.get("close_price") or 0)
+        previous = float(row.get("previous_close_price") or 0)
+        gain = float(row.get("gain_amount") or 0)
+    except (TypeError, ValueError):
+        return False
+    address = (row.get("address") or "").strip()
+    city = (row.get("city") or "").strip()
+    listing_key = (row.get("listing_key") or "").strip()
+    close_date = (row.get("close_date") or "").strip()
+    previous_close_date = (row.get("previous_close_date") or "").strip()
+    return bool(
+        listing_key
+        and address
+        and city
+        and close_date
+        and previous_close_date
+        and close_price > 0
+        and previous > 0
+        and gain > 0
+        and close_price > previous
+    )
+
+
+def _has_profitable_image(row: dict[str, Any]) -> bool:
+    return bool((row.get("image_url") or "").strip())
+
+
+def _attach_profitable_photos(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _attach_sold_below_photos(rows)
+
+
+def _profitable_from_table(limit: int, cities: list[str] | None) -> tuple[list[dict[str, Any]], str | None]:
+    from homepage.models import ProfitableInvestment
+
+    qs = ProfitableInvestment.objects.all()
+    if cities:
+        city_q = Q()
+        for city in cities:
+            city_q |= Q(city__iexact=city) | Q(city__istartswith=city)
+        qs = qs.filter(city_q)
+    rows = list(qs.order_by("-close_date")[:limit])
+    photos = _photos(row.listing_key for row in rows)
+    return (
+        [
+            _profitable_row(
+                listing_key=row.listing_key,
+                address=row.address,
+                city=row.city,
+                property_sub_type=row.property_sub_type,
+                bedrooms=row.bedrooms,
+                bathrooms=row.bathrooms,
+                close_price=float(row.close_price),
+                close_date=row.close_date.isoformat(),
+                previous_close_price=float(row.previous_close_price),
+                previous_close_date=row.previous_close_date.isoformat(),
+                gain_amount=float(row.gain_amount),
+                image_url=photos.get(row.listing_key),
+            )
+            for row in rows
+        ],
+        rows[0].computed_at.isoformat() if rows else None,
+    )
+
+
+def _profitable_from_local(limit: int, cities: list[str] | None) -> list[dict[str, Any]]:
+    from homepage.services.sold_below import find_repeat_sale_gains
+
+    qs = Property.objects.filter(
+        standard_status__iexact="Closed",
+        close_price__gt=0,
+        close_date__isnull=False,
+        unparsed_address__isnull=False,
+    ).exclude(unparsed_address="")
+    if cities:
+        city_q = Q()
+        for city in cities:
+            city_q |= Q(city__istartswith=city)
+        qs = qs.filter(city_q)
+    raw = [
+        {
+            "ListingKey": row["listing_key"],
+            "UnparsedAddress": row["unparsed_address"],
+            "City": row["city"] or "",
+            "PropertySubType": row["property_sub_type"] or "",
+            "BedroomsTotal": row["bedrooms_total"],
+            "BathroomsTotalInteger": row["bathrooms_total_integer"],
+            "ClosePrice": float(row["close_price"]),
+            "CloseDate": row["close_date"].isoformat(),
+        }
+        for row in qs.order_by("-close_date").values(
+            "listing_key",
+            "unparsed_address",
+            "city",
+            "property_sub_type",
+            "bedrooms_total",
+            "bathrooms_total_integer",
+            "close_price",
+            "close_date",
+        )[:12_000]
+    ]
+    gains = find_repeat_sale_gains(raw)[:limit]
+    photos = _photos(gain.listing_key for gain in gains)
+    return [
+        _profitable_row(
+            listing_key=gain.listing_key,
+            address=gain.address,
+            city=gain.city,
+            property_sub_type=gain.property_sub_type,
+            bedrooms=gain.bedrooms,
+            bathrooms=gain.bathrooms,
+            close_price=gain.close_price,
+            close_date=gain.close_date.isoformat(),
+            previous_close_price=gain.previous_close_price,
+            previous_close_date=gain.previous_close_date.isoformat(),
+            gain_amount=gain.gain_amount,
+            image_url=photos.get(gain.listing_key),
+        )
+        for gain in gains
+    ]
+
+
+def _profitable_from_ampre(limit: int, cities: list[str] | None) -> list[dict[str, Any]]:
+    from homepage.services.sold_below import find_repeat_sale_gains
+
+    targets = cities[:2] if cities else list(GTA_CITIES[:3])
+    cache_key = f"home:profitable:live:{','.join(c.lower() for c in targets)}:{limit}"
+
+    def build() -> list[dict[str, Any]]:
+        raw: list[dict[str, Any]] = []
+        for city in targets:
+            try:
+                raw.extend(ampre.fetch_closed_sales(city, days=730, max_rows=8_000))
+            except AmpreClientError as exc:
+                logger.warning("Profitable-investments live AMPRE miss for %s: %s", city, exc)
+        gains = find_repeat_sale_gains(raw)[:limit]
+        photos = _photos(gain.listing_key for gain in gains)
+        return [
+            _profitable_row(
+                listing_key=gain.listing_key,
+                address=gain.address,
+                city=gain.city,
+                property_sub_type=gain.property_sub_type,
+                bedrooms=gain.bedrooms,
+                bathrooms=gain.bathrooms,
+                close_price=gain.close_price,
+                close_date=gain.close_date.isoformat(),
+                previous_close_price=gain.previous_close_price,
+                previous_close_date=gain.previous_close_date.isoformat(),
+                gain_amount=gain.gain_amount,
+                image_url=photos.get(gain.listing_key),
+            )
+            for gain in gains
+        ]
+
+    return _cached(cache_key, 60 * 60, build)
+
+
+def profitable_investments(
+    limit: int = 3,
+    city: str | None = None,
+    cities: list[str] | None = None,
+) -> dict[str, Any]:
+    """Homes that resold higher within the last 12 months (homepage + view-all)."""
+    preferred = [c for c in (cities or ([city] if city else [])) if c]
+    fetch_limit = max(limit * 4, limit)
+    rows, computed_at = _profitable_from_table(fetch_limit, preferred or None)
+    rows = [row for row in rows if _is_complete_profitable_row(row)]
+    source = "table"
+    if len(rows) < fetch_limit:
+        local = [
+            row
+            for row in _profitable_from_local(fetch_limit, preferred or None)
+            if _is_complete_profitable_row(row)
+        ]
+        if local:
+            seen = {row["listing_key"] for row in rows}
+            for row in local:
+                if row["listing_key"] in seen:
+                    continue
+                rows.append(row)
+                seen.add(row["listing_key"])
+                if len(rows) >= fetch_limit:
+                    break
+            source = "table+local" if computed_at else "local"
+            computed_at = computed_at or timezone.now().isoformat()
+    if len(rows) < max(1, limit // 2):
+        try:
+            live = [
+                row
+                for row in _profitable_from_ampre(fetch_limit, preferred or None)
+                if _is_complete_profitable_row(row)
+            ]
+        except Exception as exc:  # noqa: BLE001 — feed must degrade, not 500
+            logger.warning("Profitable-investments AMPRE fill failed: %s", exc)
+            live = []
+        if live:
+            seen = {row["listing_key"] for row in rows}
+            for row in live:
+                if row["listing_key"] in seen:
+                    continue
+                rows.append(row)
+                seen.add(row["listing_key"])
+                if len(rows) >= fetch_limit:
+                    break
+            source = f"{source}+ampre" if rows else "ampre"
+            computed_at = computed_at or timezone.now().isoformat()
+    rows = _attach_profitable_photos(rows)
+    results = [
+        row
+        for row in rows
+        if _is_complete_profitable_row(row) and _has_profitable_image(row)
+    ][:limit]
+    return {
+        "results": results,
+        "count": len(results),
+        "empty": len(results) == 0,
+        "computed_at": computed_at if results else None,
+        "source": source if results else "none",
+        "cities": preferred,
+    }
+
+
+# --------------------------------------------------------------------------
 # Market snapshot (row kept fresh by a job; recomputed on demand if stale)
 # --------------------------------------------------------------------------
 

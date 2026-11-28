@@ -178,12 +178,18 @@ def fetch_properties():
                             'standard_status': property_data.get('StandardStatus'),
                             'status_change_timestamp': property_data.get('StatusChangeTimestamp'),
                             'public_remarks': property_data.get('PublicRemarks'),
+                            'list_price': property_data.get('ListPrice'),
+                            'original_list_price': property_data.get('OriginalListPrice'),
                             'listing_url': property_data.get('ListingURL'),
                             'origin_system_name': property_data.get('OriginatingSystemName'),
                             'photos_count': property_data.get('PhotosCount'),
                             'photos_change_timestamp': property_data.get('PhotosChangeTimestamp'),
                             'common_interest': property_data.get('CommonInterest'),
                             'list_aor': property_data.get('ListAOR'),
+                            'list_office_key': property_data.get('ListOfficeKey'),
+                            'list_office_name': property_data.get('ListOfficeName'),
+                            'colist_office_key': property_data.get('CoListOfficeKey'),
+                            'list_agent_key': property_data.get('ListAgentKey'),
                             # 'list_aor_key': property_data.get('ListAORKey'),
                             'unparsed_address': property_data.get('UnparsedAddress'),
                             'postal_code': property_data.get('PostalCode'),
@@ -204,6 +210,21 @@ def fetch_properties():
                             'map_coordinate_verified_yn': property_data.get('MapCoordinateVerifiedYN', False),
                             'geocode_manual_yn': property_data.get('GeocodeManualYN', False),
                             'parking_total': property_data.get('ParkingTotal'),
+                            'garages': (
+                                property_data.get('GarageSpaces')
+                                if property_data.get('GarageSpaces') is not None
+                                else property_data.get('CoveredSpaces')
+                            ),
+                            'garage_size': (
+                                ', '.join(property_data.get('GarageType', []))
+                                if isinstance(property_data.get('GarageType'), list)
+                                else property_data.get('GarageType')
+                            ),
+                            'kitchens': (
+                                property_data.get('NumberOfKitchens')
+                                if property_data.get('NumberOfKitchens') is not None
+                                else property_data.get('KitchensTotalInteger')
+                            ),
                             'year_built': property_data.get('YearBuilt'),
                             'bathrooms_partial': property_data.get('BathroomsPartial'),
                             'bathrooms_total_integer': property_data.get('BathroomsTotalInteger'),
@@ -217,9 +238,11 @@ def fetch_properties():
                             'below_grade_finished_area': property_data.get('BelowGradeFinishedArea'),
                             'below_grade_finished_area_units': property_data.get('BelowGradeFinishedAreaUnits'),
                             'below_grade_finished_area_source': property_data.get('BelowGradeFinishedAreaSource'),
-                            'living_area': property_data.get('LivingArea'),
+                            'living_area': property_data.get('LivingArea') or property_data.get('LivingAreaMinimum'),
                             'living_area_units': property_data.get('LivingAreaUnits'),
                             'living_area_source': property_data.get('LivingAreaSource'),
+                            'living_area_minimum': property_data.get('LivingAreaMinimum'),
+                            'living_area_maximum': property_data.get('LivingAreaMaximum'),
                             'fireplaces_total': property_data.get('FireplacesTotal'),
                             'fireplace_yn': property_data.get('FireplaceYN'),
                             'fireplace_features': ', '.join(property_data.get('FireplaceFeatures', [])),
@@ -234,7 +257,7 @@ def fetch_properties():
                             'property_condition': ', '.join(property_data.get('PropertyCondition', [])),
                             'roof': ', '.join(property_data.get('Roof', [])),
                             'construction_materials': ', '.join(property_data.get('ConstructionMaterials', [])),
-                            'stories': property_data.get('Stories'),
+                            'stories': property_data.get('Stories') or property_data.get('StoriesTotal'),
                             'property_attached_yn': property_data.get('PropertyAttachedYN', False),
                             'accessibility_features': ', '.join(property_data.get('AccessibilityFeatures', [])),
                             'bedrooms_above_grade': property_data.get('BedroomsAboveGrade'),
@@ -268,6 +291,9 @@ def fetch_properties():
                                 'room_length': room_data.get('RoomLength'),
                                 'room_width': room_data.get('RoomWidth'),
                                 'room_level': room_data.get('RoomLevel'),
+                                'room_description': room_data.get('RoomDescription'),
+                                'room_dimensions': room_data.get('RoomDimensions'),
+                                'room_length_width_units': room_data.get('RoomLengthWidthUnits') or 'Meters',
                             }
                         )
 
@@ -351,12 +377,17 @@ def fetch_properties_by_property_data(property_data):
         'standard_status': property_data.get('StandardStatus'),
         'status_change_timestamp': property_data.get('StatusChangeTimestamp'),
         'public_remarks': property_data.get('PublicRemarks'),
+        'original_list_price': property_data.get('OriginalListPrice'),
         'listing_url': property_data.get('ListingURL'),
         'origin_system_name': property_data.get('OriginatingSystemName'),
         'photos_count': property_data.get('PhotosCount'),
         'photos_change_timestamp': property_data.get('PhotosChangeTimestamp'),
         'common_interest': property_data.get('CommonInterest'),
         'list_aor': property_data.get('ListAOR'),
+        'list_office_key': property_data.get('ListOfficeKey'),
+        'list_office_name': property_data.get('ListOfficeName'),
+        'colist_office_key': property_data.get('CoListOfficeKey'),
+        'list_agent_key': property_data.get('ListAgentKey'),
         'unparsed_address': property_data.get('UnparsedAddress'),
         'postal_code': property_data.get('PostalCode'),
         'subdivision_name': property_data.get('SubdivisionName'),
@@ -376,6 +407,21 @@ def fetch_properties_by_property_data(property_data):
         'map_coordinate_verified_yn': property_data.get('MapCoordinateVerifiedYN', False),
         'geocode_manual_yn': property_data.get('GeocodeManualYN', False),
         'parking_total': property_data.get('ParkingTotal'),
+        'garages': (
+            property_data.get('GarageSpaces')
+            if property_data.get('GarageSpaces') is not None
+            else property_data.get('CoveredSpaces')
+        ),
+        'garage_size': (
+            ', '.join(property_data.get('GarageType', []))
+            if isinstance(property_data.get('GarageType'), list)
+            else property_data.get('GarageType')
+        ),
+        'kitchens': (
+            property_data.get('NumberOfKitchens')
+            if property_data.get('NumberOfKitchens') is not None
+            else property_data.get('KitchensTotalInteger')
+        ),
         'year_built': property_data.get('YearBuilt'),
         'bathrooms_partial': property_data.get('BathroomsPartial'),
         'bathrooms_total_integer': property_data.get('BathroomsTotalInteger'),
@@ -389,9 +435,11 @@ def fetch_properties_by_property_data(property_data):
         'below_grade_finished_area': property_data.get('BelowGradeFinishedArea'),
         'below_grade_finished_area_units': property_data.get('BelowGradeFinishedAreaUnits'),
         'below_grade_finished_area_source': property_data.get('BelowGradeFinishedAreaSource'),
-        'living_area': property_data.get('LivingArea'),
+        'living_area': property_data.get('LivingArea') or property_data.get('LivingAreaMinimum'),
         'living_area_units': property_data.get('LivingAreaUnits'),
         'living_area_source': property_data.get('LivingAreaSource'),
+        'living_area_minimum': property_data.get('LivingAreaMinimum'),
+        'living_area_maximum': property_data.get('LivingAreaMaximum'),
         'fireplaces_total': property_data.get('FireplacesTotal'),
         'fireplace_yn': property_data.get('FireplaceYN'),
         'fireplace_features': ', '.join(property_data.get('FireplaceFeatures', [])),
@@ -406,7 +454,7 @@ def fetch_properties_by_property_data(property_data):
         'property_condition': ', '.join(property_data.get('PropertyCondition', [])),
         'roof': ', '.join(property_data.get('Roof', [])),
         'construction_materials': ', '.join(property_data.get('ConstructionMaterials', [])),
-        'stories': property_data.get('Stories'),
+        'stories': property_data.get('Stories') or property_data.get('StoriesTotal'),
         'property_attached_yn': property_data.get('PropertyAttachedYN', False),
         'accessibility_features': ', '.join(property_data.get('AccessibilityFeatures', [])),
         'bedrooms_above_grade': property_data.get('BedroomsAboveGrade'),
@@ -438,6 +486,9 @@ def fetch_properties_by_property_data(property_data):
                 'room_length': room_data.get('RoomLength'),
                 'room_width': room_data.get('RoomWidth'),
                 'room_level': room_data.get('RoomLevel'),
+                'room_description': room_data.get('RoomDescription'),
+                'room_dimensions': room_data.get('RoomDimensions'),
+                'room_length_width_units': room_data.get('RoomLengthWidthUnits') or 'Meters',
             }
         )
 

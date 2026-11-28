@@ -8,7 +8,6 @@ import logging
 import mimetypes
 from urllib.parse import urlparse
 
-from cloudinary import uploader as cloudinary_uploader
 from cloudinary.exceptions import Error as CloudinaryError
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -23,6 +22,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from mls.models import Attachment, Content, ContentMeta, ListingSubmission, PreComProperty
+from mls.services.precon_assets import (
+    ATTACHMENT_URL_MAX_LENGTH,
+    precon_asset_storage_configured,
+    upload_precon_asset,
+)
 from mls.serializers_studio import (
     StudioPreconDetailSerializer,
     StudioPreconListSerializer,
@@ -222,9 +226,14 @@ class StudioPreconAssetUploadAPIView(APIView):
         upload = request.FILES.get("file")
         if not upload:
             return Response({"detail": "Choose a file to upload."}, status=status.HTTP_400_BAD_REQUEST)
-        if not settings.PRECON_ASSET_STORAGE_CONFIGURED:
+        if not precon_asset_storage_configured():
             return Response(
-                {"detail": "File storage is not configured on the server."},
+                {
+                    "detail": (
+                        "Cloudinary is not configured on the server. "
+                        "Set CLOUDINARY_URL or cloud name + API key + secret."
+                    )
+                },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         max_mb = settings.PRECON_ASSET_MAX_UPLOAD_MB
@@ -239,20 +248,18 @@ class StudioPreconAssetUploadAPIView(APIView):
             )
 
         try:
-            uploaded = cloudinary_uploader.upload(
-                upload,
-                resource_type="auto",
-                folder="precon/studio",
-                use_filename=True,
-                unique_filename=True,
-            )
+            url = upload_precon_asset(upload, folder="precon/studio")
         except CloudinaryError:
             logger.exception("Studio pre-con upload failed")
             return Response(
                 {"detail": "The file could not be stored. Please try again."}, status=status.HTTP_502_BAD_GATEWAY
             )
-        url = str(uploaded.get("secure_url") or "")
-        if not url or len(url) > 200:
+        except RuntimeError:
+            return Response(
+                {"detail": "Cloudinary is not configured on the server."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        if not url or len(url) > ATTACHMENT_URL_MAX_LENGTH:
             return Response({"detail": "Storage returned an unusable link."}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(
             {"url": url, "mime_type": mime_type, "title": upload.name[:255]}, status=status.HTTP_201_CREATED
