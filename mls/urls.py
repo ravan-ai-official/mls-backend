@@ -101,6 +101,7 @@ urlpatterns = [
     path('properties/map-aggregates/', MapAggregatesAPIView.as_view(), name='map-aggregates'),
     path('locations/geocode/', MapGeocodingAPIView.as_view(), name='map-geocoding'),
     path('properties/property-types/', PropertyTypesAPIView.as_view(), name='property-types'),
+    path('properties/filter-schema/', SearchFiltersSchemaAPIView.as_view(), name='property-filter-schema'),
     path('ai-search/parse/', AISearchParseAPIView.as_view(), name='ai-search-parse'),
     path('ai/assist/', AIAssistAPIView.as_view(), name='ai-assist'),
     path('activity/precon/', PreconActivityAPIView.as_view(), name='precon-activity'),

@@ -859,12 +859,10 @@ class Command(BaseCommand):
                         or timezone.now()
                     )
 
+                # History rows only on price/status change — not MT-only noise.
                 snapshot_changed = (
                     old_price != new_price
-                    or old_status
-                    != new_status
-                    or old_modification_timestamp
-                    != new_modification_timestamp
+                    or old_status != new_status
                 )
 
                 for field, value in (

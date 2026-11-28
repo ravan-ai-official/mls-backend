@@ -163,6 +163,16 @@ def fetch_properties():
                             'appliances': ', '.join(property_data.get('Appliances', [])),
                             'other_equipment': ', '.join(property_data.get('OtherEquipment', [])),
                             'security_features': ', '.join(property_data.get('SecurityFeatures', [])),
+                            'inclusions': (
+                                property_data.get('Inclusions')
+                                if isinstance(property_data.get('Inclusions'), str)
+                                else ', '.join(property_data.get('Inclusions', []) or [])
+                            ),
+                            'interior_features': ', '.join(
+                                property_data.get('InteriorFeatures')
+                                or property_data.get('Features')
+                                or []
+                            ),
                             'total_actual_rent': property_data.get('TotalActualRent'),
                             'existing_lease_type': ', '.join(property_data.get('ExistingLeaseType', [])),
                             'association_fee': property_data.get('AssociationFee'),
@@ -362,6 +372,16 @@ def fetch_properties_by_property_data(property_data):
         'appliances': ', '.join(property_data.get('Appliances', [])),
         'other_equipment': ', '.join(property_data.get('OtherEquipment', [])),
         'security_features': ', '.join(property_data.get('SecurityFeatures', [])),
+        'inclusions': (
+            property_data.get('Inclusions')
+            if isinstance(property_data.get('Inclusions'), str)
+            else ', '.join(property_data.get('Inclusions', []) or [])
+        ),
+        'interior_features': ', '.join(
+            property_data.get('InteriorFeatures')
+            or property_data.get('Features')
+            or []
+        ),
         'total_actual_rent': property_data.get('TotalActualRent'),
         'existing_lease_type': ', '.join(property_data.get('ExistingLeaseType', [])),
         'association_fee': property_data.get('AssociationFee'),

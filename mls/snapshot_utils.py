@@ -22,8 +22,11 @@ def _aware_utc(value):
 
 def record_property_snapshot(property_instance) -> None:
     """
-    Append a PropertySnapshot when list price, status, or board modification time
-    differs from the latest stored snapshot for this listing_key.
+    Append a PropertySnapshot when list price or status differs from the latest
+    row for this listing_key.
+
+    Board ModificationTimestamp-only bumps must not create history rows — those
+    produced duplicate identical Buy/Sell History lines in the UI.
     """
     from mls.models import PropertySnapshot  # local import avoids circular models↔helpers
 
@@ -42,8 +45,7 @@ def record_property_snapshot(property_instance) -> None:
         if last:
             same_price = last.list_price == lp
             same_status = (last.standard_status or "") == st
-            same_mt = last.source_modification_timestamp == mt
-            if same_price and same_status and same_mt:
+            if same_price and same_status:
                 return
         PropertySnapshot.objects.create(
             listing_key=key,

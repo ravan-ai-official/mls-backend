@@ -145,17 +145,18 @@ def _default_sections() -> list[dict]:
         {"id": "trendingCommunities", "visible": True, "content": {"eyebrow": "Discover the GTA", "title": "Trending Communities", "actionLabel": "View All", "actionHref": "/communities"}},
         {"id": "featuredListings", "visible": True, "content": {"eyebrow": "Curated for you", "title": "Featured MLS® Listings", "description": "Hand-picked homes from the HomeAtlas team.", "useAutomaticDescription": True, "actionLabel": "View All", "actionHref": "/featured-listings"}},
         {
+            # Hidden: search uses REALTOR.ca-style Filters (no property-type tabs).
             "id": "propertyTypes",
-            "visible": True,
+            "visible": False,
             "content": {
                 "title": "Explore by Property Type",
                 "items": [
-                    {"icon": "detached", "label": "Detached", "href": "/listings?type=Detached"},
-                    {"icon": "semiDetached", "label": "Semi-Detached", "href": "/listings?type=Semi-Detached"},
-                    {"icon": "condo", "label": "Condos", "href": "/listings?type=Condo"},
-                    {"icon": "townhome", "label": "Townhomes", "href": "/listings?type=Townhome"},
-                    {"icon": "luxury", "label": "Luxury", "href": "/listings?sqftMin=3501"},
-                    {"icon": "openHouse", "label": "Open Houses", "href": "/listings?openHouse=1"},
+                    {"icon": "detached", "label": "Detached", "href": "/listings?property_type=Detached"},
+                    {"icon": "semiDetached", "label": "Semi-Detached", "href": "/listings?property_type=Semi-Detached"},
+                    {"icon": "condo", "label": "Condos", "href": "/listings?property_type_group=condo"},
+                    {"icon": "townhome", "label": "Townhomes", "href": "/listings?building_type=Row%20%2F%20Townhouse"},
+                    {"icon": "luxury", "label": "Luxury", "href": "/listings?building_area_min=3501"},
+                    {"icon": "openHouse", "label": "Open Houses", "href": "/listings?open_house=1"},
                 ],
             },
         },

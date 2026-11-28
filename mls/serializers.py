@@ -1,4 +1,6 @@
 # api/serializers.py
+import re
+
 from rest_framework import serializers
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
@@ -44,37 +46,51 @@ class MediaSerializer(serializers.ModelSerializer):
 
 class RoomSerializer(serializers.ModelSerializer):
     dimensions_display = serializers.SerializerMethodField()
+    dimensions_m = serializers.SerializerMethodField()
     dimensions_ft = serializers.SerializerMethodField()
+    is_metric_source = serializers.SerializerMethodField()
 
     class Meta:
         model = Room
         fields = [
             "room_type",
             "room_level",
+            "room_description",
             "room_length",
             "room_width",
             "room_dimensions",
             "room_length_width_units",
             "dimensions_display",
+            "dimensions_m",
             "dimensions_ft",
+            "is_metric_source",
         ]
 
-    def get_dimensions_display(self, obj):
-        from mls.services.room_dimensions import format_room_dimensions
+    def _dual(self, obj):
+        from mls.services.room_dimensions import dual_room_dimensions
 
-        return format_room_dimensions(
-            obj.room_length,
-            obj.room_width,
-            obj.room_length_width_units,
-            obj.room_dimensions,
-        )
+        cached = getattr(obj, "_dual_room_dims", None)
+        if cached is None:
+            cached = dual_room_dimensions(
+                obj.room_length,
+                obj.room_width,
+                obj.room_length_width_units,
+                obj.room_dimensions,
+            )
+            setattr(obj, "_dual_room_dims", cached)
+        return cached
+
+    def get_dimensions_display(self, obj):
+        return self._dual(obj)["dimensions_display"]
+
+    def get_dimensions_m(self, obj):
+        return self._dual(obj)["dimensions_m"]
 
     def get_dimensions_ft(self, obj):
-        from mls.services.room_dimensions import _is_metric, meters_to_feet_display
+        return self._dual(obj)["dimensions_ft"]
 
-        if not _is_metric(obj.room_length_width_units):
-            return None
-        return meters_to_feet_display(obj.room_length, obj.room_width)
+    def get_is_metric_source(self, obj):
+        return self._dual(obj)["is_metric_source"]
 
 
 # `to_attr` names for the batched lookups below. PropertySerializer reads
@@ -214,6 +230,34 @@ class MediaDetailSerializer(serializers.ModelSerializer):
         fields = '__all__' 
 
 
+_WASHROOM_TYPE_RE = re.compile(
+    r"bath|washroom|ensuite|en-suite|powder|w/?c\b|toilet",
+    re.I,
+)
+
+
+def _split_feature_text(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = [str(v).strip() for v in value if v not in (None, "")]
+    else:
+        text = str(value).strip()
+        if not text:
+            return []
+        items = [part.strip() for part in re.split(r"[,;|/]+", text) if part.strip()]
+    # Preserve order, drop dupes (case-insensitive).
+    seen = set()
+    out = []
+    for item in items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 class PropertyDetailSerializer(serializers.ModelSerializer):
     rooms = RoomSerializer(many=True, read_only=True)
     media = serializers.SerializerMethodField()
@@ -226,6 +270,20 @@ class PropertyDetailSerializer(serializers.ModelSerializer):
     listing_brokerage = serializers.SerializerMethodField()
     living_area_range = serializers.SerializerMethodField()
     square_feet_above_ground = serializers.SerializerMethodField()
+    washrooms = serializers.SerializerMethodField()
+    washroom_info = serializers.SerializerMethodField()
+    features = serializers.SerializerMethodField()
+    interior_features_list = serializers.SerializerMethodField()
+    inclusions_list = serializers.SerializerMethodField()
+    bathrooms_full = serializers.SerializerMethodField()
+    # Key Facts aliases matching HomeAtlas / REALM labels.
+    fronting_on = serializers.SerializerMethodField()
+    lot_size = serializers.SerializerMethodField()
+    parking_drive_spaces = serializers.SerializerMethodField()
+    rooms_count = serializers.SerializerMethodField()
+    family_room = serializers.SerializerMethodField()
+    laundry_level = serializers.SerializerMethodField()
+    link = serializers.SerializerMethodField()
 
     class Meta:
         model = Property
@@ -249,10 +307,14 @@ class PropertyDetailSerializer(serializers.ModelSerializer):
         return MediaSerializer(rows, many=True, context=self.context).data
 
     def get_garage_spaces(self, obj):
-        return obj.garages
+        return getattr(obj, "garages", None)
 
     def get_garage_type(self, obj):
-        return (obj.garage_size or obj.parking_features or "").strip() or None
+        return (
+            (getattr(obj, "garage_size", None) or obj.parking_features or "")
+            .strip()
+            or None
+        )
 
     def get_style(self, obj):
         return (obj.architectural_style or "").strip() or None
@@ -277,7 +339,140 @@ class PropertyDetailSerializer(serializers.ModelSerializer):
     def get_square_feet_above_ground(self, obj):
         if obj.above_grade_finished_area is not None:
             return float(obj.above_grade_finished_area)
+        # TREB often only fills the living-area band (e.g. 3000-3500).
+        if obj.living_area_minimum is not None:
+            return float(obj.living_area_minimum)
+        if obj.living_area is not None:
+            return float(obj.living_area)
         return None
+
+    def get_fronting_on(self, obj):
+        return (getattr(obj, "direction_faces", None) or "").strip() or None
+
+    def get_lot_size(self, obj):
+        dims = (obj.lot_size_dimensions or "").strip()
+        if dims:
+            return dims
+        front = obj.frontage_length_numeric
+        if front is None:
+            return None
+        units = (obj.frontage_length_numeric_units or "ft").strip()
+        return f"{front:g} {units}".strip()
+
+    def get_parking_drive_spaces(self, obj):
+        return getattr(obj, "open_parking_spaces", None)
+
+    def get_rooms_count(self, obj):
+        total = getattr(obj, "rooms_total", None)
+        if total is not None:
+            return total
+        try:
+            return obj.rooms.count()
+        except Exception:
+            return None
+
+    def get_family_room(self, obj):
+        yn = getattr(obj, "family_room_yn", None)
+        if yn is None:
+            return None
+        return "Yes" if yn else "No"
+
+    def get_laundry_level(self, obj):
+        return (getattr(obj, "laundry_features", None) or "").strip() or None
+
+    def get_link(self, obj):
+        yn = getattr(obj, "link_yn", None)
+        if yn is None:
+            return None
+        return "Yes" if yn else "No"
+
+    def get_bathrooms_full(self, obj):
+        total = obj.bathrooms_total_integer
+        partial = obj.bathrooms_partial
+        if total is None:
+            return None
+        if partial is None:
+            return total
+        try:
+            return max(0, int(total) - int(partial))
+        except (TypeError, ValueError):
+            return total
+
+    def get_washrooms(self, obj):
+        """Bathroom/washroom Room rows for the Washrooms table (type/level/pieces)."""
+        rows = []
+        for room in obj.rooms.all():
+            room_type = (room.room_type or "").strip()
+            if not room_type or not _WASHROOM_TYPE_RE.search(room_type):
+                continue
+            rows.append(RoomSerializer(room, context=self.context).data)
+        return rows
+
+    def get_washroom_info(self, obj):
+        """REALM-style washroom pieces table from washrooms_json or room notes."""
+        raw = getattr(obj, "washrooms_json", None) or []
+        out = []
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                out.append(
+                    {
+                        "count": item.get("count"),
+                        "pieces": item.get("pieces"),
+                        "level": item.get("level"),
+                    }
+                )
+        if out:
+            return out
+        # Fallback: parse "4 Pc" / "5 Pc Ensuite" from bathroom room rows.
+        piece_re = re.compile(r"(\d+)\s*pc", re.I)
+        buckets: dict[tuple, int] = {}
+        for room in obj.rooms.all():
+            room_type = (room.room_type or "").strip()
+            desc = (room.room_description or "").strip()
+            hay = f"{room_type} {desc}"
+            if not _WASHROOM_TYPE_RE.search(hay) and not piece_re.search(hay):
+                continue
+            match = piece_re.search(hay)
+            pieces = int(match.group(1)) if match else None
+            level = (room.room_level or "").strip() or None
+            key = (pieces, level)
+            buckets[key] = buckets.get(key, 0) + 1
+        return [
+            {"count": count, "pieces": pieces, "level": level}
+            for (pieces, level), count in buckets.items()
+        ]
+
+    def get_features(self, obj):
+        """
+        REALM Features chips (Family Room, Fireplace/Stove) — not appliances.
+
+        Prefer property_features; fall back to fireplace/family signals only.
+        """
+        primary = _split_feature_text(getattr(obj, "property_features", None))
+        if primary:
+            return primary
+        fallback = []
+        if getattr(obj, "family_room_yn", None):
+            fallback.append("Family Room")
+        if obj.fireplace_yn or (obj.fireplaces_total or 0) > 0:
+            fallback.append("Fireplace/Stove")
+        fallback.extend(_split_feature_text(obj.fireplace_features))
+        return _split_feature_text(fallback)
+
+    def get_interior_features_list(self, obj):
+        return _split_feature_text(getattr(obj, "interior_features", None))
+
+    def get_inclusions_list(self, obj):
+        """Inclusions text/list for FE; prefer free-text Inclusions over Appliances."""
+        text = (obj.inclusions or "").strip()
+        if text:
+            # Keep full sentence when it looks like a narrative (REALM style).
+            if "," in text and not text.lower().startswith("s/s"):
+                return _split_feature_text(text)
+            return [text]
+        return _split_feature_text(obj.appliances)
 
 
 class UserFeedbackSerializer(serializers.ModelSerializer):
