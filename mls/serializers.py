@@ -167,6 +167,8 @@ class PropertySerializer(serializers.ModelSerializer):
             # Home type: property_sub_type is "Single Family" for most rows.
             'structure_type', 'property_attached_yn',
             'virtual_tour_url',
+            # Admin pin → Featured badge on cards (map, list, rails).
+            'is_featured',
             # 'rooms'
         ]
 
