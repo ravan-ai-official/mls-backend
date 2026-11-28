@@ -2446,7 +2446,7 @@ class FeaturedPropertiesAPIView(APIView):
         # Near-visitor cities: explicit history cities, else IP city.
         cities = cities_for_request(request)
         cache_key = (
-            f"featured-properties:v2:{limit}:{int(fill)}:"
+            f"featured-properties:v3:{limit}:{int(fill)}:"
             f"{_featured_cache_digest(request.query_params, has_search_history=has_search_history)}"
         )
         cached_payload = cache.get(cache_key)
@@ -2517,10 +2517,18 @@ class FeaturedPropertiesAPIView(APIView):
             rows += [(p, "exclusive") for p in exclusive]
 
         serializer = PropertySerializer([p for p, _ in rows], many=True, context={"request": request})
-        results = [
-            {**data, "featured_source": source}
-            for data, (_, source) in zip(serializer.data, rows)
-        ]
+        results = []
+        for data, (prop, source) in zip(serializer.data, rows):
+            # Every card on the Featured rail gets a Featured badge; pinned
+            # rows also keep is_featured=true from the model.
+            results.append(
+                {
+                    **data,
+                    "featured_source": source,
+                    "badge": "Featured",
+                    "is_featured": bool(getattr(prop, "is_featured", False) or source == "pinned"),
+                }
+            )
         payload = {
             "count": len(results),
             "pinned_count": len(pinned),
