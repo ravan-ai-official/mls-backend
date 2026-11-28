@@ -73,6 +73,12 @@ class PublicView(APIView):
     authentication_classes: list = []
 
 
+class PublicAuthenticatedOptionalView(APIView):
+    """AllowAny but still parse JWT so sold rails can detect logged-in users."""
+
+    permission_classes = [AllowAny]
+
+
 # --------------------------------------------------------------------------
 # Editorial content
 # --------------------------------------------------------------------------
@@ -128,9 +134,13 @@ class MarketDealsView(PublicView):
             return _unavailable("Deals are temporarily unavailable.")
 
 
-class SoldBelowPurchaseView(PublicView):
+class SoldBelowPurchaseView(PublicAuthenticatedOptionalView):
     def get(self, request):
+        from mls.services.sold_access import locked_sold_feed_stub, viewer_can_view_sold
         from mls.services.visitor_place import cities_for_request
+
+        if not viewer_can_view_sold(request.user):
+            return Response(locked_sold_feed_stub(feed="sold_below_purchase"))
 
         limit = _int_param(request, "limit", 3, 1, 12)
         cities = cities_for_request(request)
@@ -144,11 +154,15 @@ class SoldBelowPurchaseView(PublicView):
         )
 
 
-class ProfitableInvestmentsView(PublicView):
+class ProfitableInvestmentsView(PublicAuthenticatedOptionalView):
     """Homepage rail (limit=3) and /profitable-investments view-all (higher limit)."""
 
     def get(self, request):
+        from mls.services.sold_access import locked_sold_feed_stub, viewer_can_view_sold
         from mls.services.visitor_place import cities_for_request
+
+        if not viewer_can_view_sold(request.user):
+            return Response(locked_sold_feed_stub(feed="profitable_investments"))
 
         limit = _int_param(request, "limit", 3, 1, 48)
         cities = cities_for_request(request)

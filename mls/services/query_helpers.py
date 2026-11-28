@@ -796,12 +796,16 @@ def _build_map_aggregate_cache_key(params, *, allow_delisted: bool = False) -> s
 
 def _build_property_filter_cache_key(request) -> str:
     """Stable cache key for GET /properties/filter/ (map + search share this view)."""
+    from mls.services.sold_access import viewer_can_view_sold
+
     items: list[tuple[str, str]] = []
     for key in sorted(request.GET.keys()):
         for value in request.GET.getlist(key):
             items.append((key, value))
     # Staff and public must not share a cache entry when delisted visibility differs.
     items.append(("allow_delisted", "1" if viewer_can_see_delisted(request.user) else "0"))
+    # Sold redaction differs for anonymous vs authenticated — never share cache.
+    items.append(("sold_view", "1" if viewer_can_view_sold(request.user) else "0"))
     digest = hashlib.md5(
         json.dumps(items, default=str).encode("utf-8")
     ).hexdigest()

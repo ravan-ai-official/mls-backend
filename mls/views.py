@@ -571,10 +571,16 @@ def _build_map_aggregate_cache_key(params, *, allow_delisted: bool = False) -> s
 
 def _build_property_filter_cache_key(request) -> str:
     """Stable cache key for GET /properties/filter/ (map + search share this view)."""
+    from mls.services.sold_access import viewer_can_view_sold
+
     items: list[tuple[str, str]] = []
     for key in sorted(request.GET.keys()):
         for value in request.GET.getlist(key):
             items.append((key, value))
+    items.append(
+        ("allow_delisted", "1" if viewer_can_see_delisted(request.user) else "0")
+    )
+    items.append(("sold_view", "1" if viewer_can_view_sold(request.user) else "0"))
     digest = hashlib.md5(
         json.dumps(items, default=str).encode("utf-8")
     ).hexdigest()
@@ -2153,9 +2159,18 @@ class PropertyDetailView(APIView):
             property_obj,
             context={"request": request},
         )
+        data = serializer.data
+        from mls.services.sold_access import (
+            is_sold_property,
+            redact_sold_property_payload,
+            viewer_can_view_sold,
+        )
+
+        if is_sold_property(property_obj) and not viewer_can_view_sold(request.user):
+            data = redact_sold_property_payload(data)
 
         return Response(
-            serializer.data,
+            data,
             status=status.HTTP_200_OK,
         )
 
@@ -3858,6 +3873,11 @@ class PropertySnapshotsAPIView(APIView):
 
     def get(self, request, listing_key):
         from mls.services.listing_history import build_listing_history
+        from mls.services.sold_access import (
+            is_sold_property,
+            redact_sold_history_payload,
+            viewer_can_view_sold,
+        )
 
         qs = list(
             PropertySnapshot.objects.filter(listing_key=listing_key)
@@ -3874,14 +3894,26 @@ class PropertySnapshotsAPIView(APIView):
         ]
         # Coalesced Buy/Sell History for the property-detail table.
         history_payload = build_listing_history(listing_key)
-        return Response(
-            {
-                "listing_key": listing_key,
-                "listing_id": history_payload.get("listing_id"),
-                "snapshots": data,
-                "history": history_payload.get("history") or [],
-            }
+        payload = {
+            "listing_key": listing_key,
+            "listing_id": history_payload.get("listing_id"),
+            "snapshots": data,
+            "history": history_payload.get("history") or [],
+        }
+        prop = (
+            Property.objects.filter(listing_key=listing_key)
+            .only("standard_status", "close_price", "close_date")
+            .first()
         )
+        if not viewer_can_view_sold(request.user) and (
+            is_sold_property(prop)
+            or any(
+                (row.get("standard_status") or "").lower() in {"sold", "closed", "leased", "rented"}
+                for row in data
+            )
+        ):
+            payload = redact_sold_history_payload(payload)
+        return Response(payload)
 
 
 class PropertyNoteAPIView(APIView):

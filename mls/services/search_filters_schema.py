@@ -261,6 +261,12 @@ def get_search_filters_schema() -> dict[str, Any]:
             "keep": [
                 "Homepage Explore by Property Type section",
             ],
+            "sold_login_required": True,
+            "sold_gate_notes": (
+                "Sold transaction remains selectable when logged out. "
+                "Anonymous sold list/detail payloads set sold_locked=true and "
+                "redact prices; FE must show Sign in overlay (HouseSigma-style)."
+            ),
             "primary_controls": [
                 "transaction_type (dropdown)",
                 "price_min (dropdown)",

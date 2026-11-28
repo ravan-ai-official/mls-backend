@@ -334,14 +334,38 @@ class PropertyFilterView(APIView):
 
         serializer = PropertySerializer(page_objects, many=True, context={"request": request})
 
+        from mls.services.sold_access import (
+            is_sold_property,
+            redact_sold_property_payload,
+            request_is_sold_query,
+            viewer_can_view_sold,
+        )
+
+        results = list(serializer.data)
+        sold_query = request_is_sold_query(request.GET)
+        can_view_sold = viewer_can_view_sold(request.user)
+        sold_locked = False
+        if not can_view_sold:
+            redacted = []
+            for row, prop in zip(results, page_objects):
+                if sold_query or is_sold_property(prop):
+                    redacted.append(redact_sold_property_payload(row))
+                    sold_locked = True
+                else:
+                    redacted.append(row)
+            results = redacted
+
         payload = {
             "count": paginator.count,
             "next": offset + limit if page.has_next() else None,
             "previous": offset - limit if offset >= limit else None,
-            "results": serializer.data,
+            "results": results,
             "ranked_by_relevance": ranked_ids is not None,
             **fallback_meta,
         }
+        if sold_locked or (sold_query and not can_view_sold):
+            payload["sold_locked"] = True
+            payload["sold_login_required"] = True
         cache.set(filter_cache_key, payload, MAP_VIEW_CACHE_TTL_SECONDS)
         query = (request.GET.get("search") or "").strip()
         city = (request.GET.get("city") or "").strip()

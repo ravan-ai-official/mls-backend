@@ -641,6 +641,9 @@ class MarketSoldTrendsAPIView(APIView):
     scope (?scope=gta). The response returns one series per city and, when
     multiple cities are queried, an ``aggregate`` block used by the GTA-wide
     sold KPI strip.
+
+    Full series require login (HouseSigma-style). Anonymous callers get a
+    locked stub so the FE can show a sign-in overlay.
     """
 
     permission_classes = [AllowAny]
@@ -677,6 +680,23 @@ class MarketSoldTrendsAPIView(APIView):
         auth=[],
     )
     def get(self, request):
+        from mls.services.sold_access import viewer_can_view_sold
+
+        if not viewer_can_view_sold(request.user):
+            return Response(
+                {
+                    "sold_locked": True,
+                    "sold_login_required": True,
+                    "access": "login_required",
+                    "scope": (request.query_params.get("scope") or "").strip().lower()
+                    or "cities",
+                    "window_months": _parse_window_months(
+                        request.query_params.get("window"), default=12
+                    ),
+                    "series": [],
+                }
+            )
+
         scope = (request.query_params.get("scope") or "").strip().lower()
         raw_cities_multi = (request.query_params.get("cities") or "").strip()
         raw_city_single = (request.query_params.get("city") or "").strip()
