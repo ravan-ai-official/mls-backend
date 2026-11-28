@@ -29,9 +29,11 @@ def _row(prop: Property) -> dict:
 
 
 def _clear_featured_cache() -> None:
+    # Digest-suffixed v2 keys cannot be enumerated; clear common limit/fill prefixes
+    # used by the homepage rail (3) and view-all page (up to 48).
     keys = [
         f"featured-properties:{limit}:{fill}"
-        for limit in (3, 6, 12, 24)
+        for limit in (3, 6, 12, 24, 36, 48)
         for fill in (0, 1)
     ]
     cache.delete_many(keys)

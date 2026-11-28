@@ -301,6 +301,36 @@ class SoldBelowPurchase(models.Model):
         return self.address
 
 
+class ProfitableInvestment(models.Model):
+    """A repeat sale that closed above the home's previous sale price.
+
+    Both sales must fall in the last 12 months. Computed from AMPRE closed
+    history alongside SoldBelowPurchase; rows are replaced wholesale per city.
+    """
+
+    listing_key = models.CharField(max_length=64, unique=True)
+    address = models.CharField(max_length=255)
+    city = models.CharField(max_length=120, db_index=True)
+    property_sub_type = models.CharField(max_length=120, blank=True)
+    bedrooms = models.PositiveSmallIntegerField(null=True, blank=True)
+    bathrooms = models.PositiveSmallIntegerField(null=True, blank=True)
+    close_price = models.DecimalField(max_digits=12, decimal_places=2)
+    close_date = models.DateField()
+    previous_close_price = models.DecimalField(max_digits=12, decimal_places=2)
+    previous_close_date = models.DateField()
+    computed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-close_date"]
+
+    @property
+    def gain_amount(self):
+        return self.close_price - self.previous_close_price
+
+    def __str__(self) -> str:
+        return self.address
+
+
 class MarketSnapshot(models.Model):
     """Latest computed GTA (or per-city) market figures, one row per scope."""
 

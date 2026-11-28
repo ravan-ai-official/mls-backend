@@ -19,7 +19,7 @@ CURATED_TRANSACTIONS = ("sale", "rent")
 HERO_IMAGE = "/images/hero/hero-bg.jpg"
 
 QUICK_ICONS = {"buy", "rent", "precon", "sell"}
-TYPE_ICONS = {"detached", "condo", "townhome", "luxury", "openHouse", "rental"}
+TYPE_ICONS = {"detached", "semiDetached", "condo", "townhome", "luxury", "openHouse", "rental"}
 ADVANTAGE_ICONS = {"mls", "precon", "local", "guidance"}
 SOCIALS = ("facebook", "instagram", "youtube", "x", "linkedin")
 
@@ -34,6 +34,7 @@ SECTION_IDS = (
     "highReturn",
     "marketDeals",
     "soldBelow",
+    "profitableInvestments",
     "schools",
     "incentives",
     "marketIntelligence",
@@ -71,6 +72,35 @@ def default_documents() -> dict[str, dict]:
         # Empty pages → public site keeps the code defaults in mls-v3 curatedPages.
         "curated": {"pages": []},
     }
+
+
+def inject_missing_homepage_sections(document: dict) -> dict:
+    """Insert newly added default sections into an older published/draft homepage.
+
+    Keeps the existing section order; missing ids (e.g. profitableInvestments)
+    are placed after the nearest preceding known section from SECTION_IDS.
+    """
+    if not isinstance(document, dict):
+        return document
+    defaults = {s["id"]: s for s in _default_sections()}
+    sections = [s for s in (document.get("sections") or []) if isinstance(s, dict) and s.get("id")]
+    have = {s["id"] for s in sections}
+    missing = [sid for sid in SECTION_IDS if sid not in have and sid in defaults]
+    if not missing:
+        return document
+    for sid in missing:
+        idx = SECTION_IDS.index(sid)
+        insert_at = len(sections)
+        for prev in reversed(SECTION_IDS[:idx]):
+            for i, section in enumerate(sections):
+                if section.get("id") == prev:
+                    insert_at = i + 1
+                    break
+            else:
+                continue
+            break
+        sections.insert(insert_at, defaults[sid])
+    return {**document, "sections": sections}
 
 
 def _default_sections() -> list[dict]:
@@ -113,7 +143,7 @@ def _default_sections() -> list[dict]:
             },
         },
         {"id": "trendingCommunities", "visible": True, "content": {"eyebrow": "Discover the GTA", "title": "Trending Communities", "actionLabel": "View All", "actionHref": "/communities"}},
-        {"id": "featuredListings", "visible": True, "content": {"eyebrow": "Curated for you", "title": "Featured MLS® Listings", "description": "Hand-picked homes from the HomeAtlas team.", "useAutomaticDescription": True, "actionLabel": "View All Listings", "actionHref": "/listings"}},
+        {"id": "featuredListings", "visible": True, "content": {"eyebrow": "Curated for you", "title": "Featured MLS® Listings", "description": "Hand-picked homes from the HomeAtlas team.", "useAutomaticDescription": True, "actionLabel": "View All", "actionHref": "/featured-listings"}},
         {
             "id": "propertyTypes",
             "visible": True,
@@ -121,19 +151,30 @@ def _default_sections() -> list[dict]:
                 "title": "Explore by Property Type",
                 "items": [
                     {"icon": "detached", "label": "Detached", "href": "/listings?type=Detached"},
+                    {"icon": "semiDetached", "label": "Semi-Detached", "href": "/listings?type=Semi-Detached"},
                     {"icon": "condo", "label": "Condos", "href": "/listings?type=Condo"},
                     {"icon": "townhome", "label": "Townhomes", "href": "/listings?type=Townhome"},
-                    {"icon": "luxury", "label": "Luxury", "href": "/listings?priceMin=2000000"},
+                    {"icon": "luxury", "label": "Luxury", "href": "/listings?sqftMin=3501"},
                     {"icon": "openHouse", "label": "Open Houses", "href": "/listings?openHouse=1"},
-                    {"icon": "rental", "label": "Rentals", "href": "/listings?tx=rent"},
                 ],
             },
         },
         {"id": "newPrecon", "visible": True, "content": {"eyebrow": "Invest ahead", "title": "New Preconstruction Projects", "actionLabel": "View All Projects", "actionHref": "/preconstruction"}},
-        {"id": "todaysNew", "visible": True, "content": {"eyebrow": "Live", "title": "Today's New Listings", "actionLabel": "View All", "actionHref": "/listings?sort=newest"}},
-        {"id": "highReturn", "visible": True, "content": {"eyebrow": "For investors", "title": "High Return Properties", "description": "Top rental yield opportunities in the GTA — strong cash flow potential", "caption": "Estimated from asking rents of comparable rentals; excludes financing.", "actionLabel": "View All Investor Properties", "actionHref": "/listings"}},
-        {"id": "marketDeals", "visible": True, "content": {"eyebrow": "Exclusive opportunities", "title": "GTA Market Deals", "caption": "Largest recent price reductions on active GTA listings"}},
+        {"id": "todaysNew", "visible": True, "content": {"eyebrow": "Live", "title": "Today's New Listings", "actionLabel": "View All", "actionHref": "/todays-new"}},
+        {"id": "highReturn", "visible": True, "content": {"eyebrow": "For investors", "title": "High Return Properties", "description": "Top rental yield opportunities in the GTA — strong cash flow potential", "caption": "Estimated from asking rents of comparable rentals; excludes financing.", "actionLabel": "View All", "actionHref": "/high-return"}},
+        {"id": "marketDeals", "visible": True, "content": {"eyebrow": "Below-Market Deals", "title": "GTA Market Deals", "caption": "Largest recent price reductions on active GTA listings"}},
         {"id": "soldBelow", "visible": True, "content": {"eyebrow": "Buyer's opportunity", "title": "Sold Below Last Purchase", "description": "Properties that recently sold below their previous purchase price — potential value opportunities", "actionLabel": "View All Sold Data", "actionHref": "/listings?status=Sold"}},
+        {
+            "id": "profitableInvestments",
+            "visible": True,
+            "content": {
+                "eyebrow": "For investors",
+                "title": "Profitable Investments",
+                "description": "Homes that sold again for more than their previous sale price in the last 12 months.",
+                "actionLabel": "View All",
+                "actionHref": "/profitable-investments",
+            },
+        },
         {
             "id": "schools",
             "visible": True,
@@ -550,6 +591,8 @@ def _section_content(section_id: str, content: dict, path: str, errors: dict) ->
             "caption": _text(content.get("caption"), f"{path}.caption", errors, 160),
         }
     if section_id == "soldBelow":
+        return _rail(content, path, errors, description=True)
+    if section_id == "profitableInvestments":
         return _rail(content, path, errors, description=True)
     if section_id == "schools":
         items = _items(content.get("items"), f"{path}.items", errors, 1, 6)
@@ -1053,12 +1096,18 @@ def _curated_query(query: dict, path: str, errors: dict) -> dict:
     price_min = _opt_int("priceMin")
     price_max = _opt_int("priceMax")
     beds_min = _opt_int("bedsMin")
+    sqft_min = _opt_int("sqftMin")
+    sqft_max = _opt_int("sqftMax")
     if price_min is not None:
         out["priceMin"] = price_min
     if price_max is not None:
         out["priceMax"] = price_max
     if beds_min is not None:
         out["bedsMin"] = beds_min
+    if sqft_min is not None:
+        out["sqftMin"] = sqft_min
+    if sqft_max is not None:
+        out["sqftMax"] = sqft_max
     if city_out:
         out["city"] = city_out
     if keywords:

@@ -318,8 +318,13 @@ if _gcs_bucket:
         STORAGES["default"]["OPTIONS"]["custom_domain"] = _custom_domain
 
 ESTATE_IMAGE_STORAGE_CONFIGURED = bool(_gcs_bucket)
-# Pre-construction projects reuse whatever media backend is active above.
-PRECON_ASSET_STORAGE_CONFIGURED = ESTATE_IMAGE_STORAGE_CONFIGURED
+# Pre-con admin/studio photos upload to Cloudinary (not the GCS media bucket).
+_PRECON_CLOUDINARY_URL = (os.environ.get("CLOUDINARY_URL") or "").strip()
+_PRECON_CLOUDINARY_TRIPLE = all(
+    (os.environ.get(name) or "").strip()
+    for name in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET")
+)
+PRECON_ASSET_STORAGE_CONFIGURED = bool(_PRECON_CLOUDINARY_URL or _PRECON_CLOUDINARY_TRIPLE)
 PRECON_ASSET_MAX_UPLOAD_MB = int(os.environ.get("PRECON_ASSET_MAX_UPLOAD_MB", "25"))
 
 STATIC_URL = "/static/"

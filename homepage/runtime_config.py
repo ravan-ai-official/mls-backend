@@ -216,16 +216,22 @@ def apply_overlay() -> None:
         except (TypeError, ValueError):
             setattr(settings, attr, value)
     cloud = getattr(settings, "CLOUDINARY", None)
-    if isinstance(cloud, dict):
-        name = saved.get("cloudinaryCloudName", "")
-        api_key = saved.get("cloudinaryApiKey", "")
-        secret = saved.get("cloudinaryApiSecret", "")
-        if name:
-            cloud["CLOUD_NAME"] = name
-        if api_key:
-            cloud["API_KEY"] = api_key
-        if secret:
-            cloud["API_SECRET"] = secret
+    if not isinstance(cloud, dict):
+        cloud = {}
+        setattr(settings, "CLOUDINARY", cloud)
+    name = saved.get("cloudinaryCloudName", "") or os.environ.get("CLOUDINARY_CLOUD_NAME", "")
+    api_key = saved.get("cloudinaryApiKey", "") or os.environ.get("CLOUDINARY_API_KEY", "")
+    secret = saved.get("cloudinaryApiSecret", "") or os.environ.get("CLOUDINARY_API_SECRET", "")
+    url = saved.get("cloudinaryUrl", "") or os.environ.get("CLOUDINARY_URL", "")
+    if name:
+        cloud["CLOUD_NAME"] = name
+    if api_key:
+        cloud["API_KEY"] = api_key
+    if secret:
+        cloud["API_SECRET"] = secret
+    # Pre-con admin uploads read this flag; keep it aligned with Cloudinary, not GCS.
+    if url.strip() or (str(name).strip() and str(api_key).strip() and str(secret).strip()):
+        setattr(settings, "PRECON_ASSET_STORAGE_CONFIGURED", True)
 
 
 def status_for(key: str, saved: dict[str, str]) -> str:

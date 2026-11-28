@@ -121,8 +121,13 @@ class PreconWriteSerializerTests(SimpleTestCase):
     def test_create_requires_title(self):
         self.assertFalse(StudioPreconWriteSerializer(data={}).is_valid())
 
-    def test_attachment_urls_fit_the_column(self):
-        long_url = "https://res.cloudinary.com/" + "a" * 200 + ".jpg"
+    def test_attachment_urls_allow_cloudinary_length(self):
+        long_url = "https://res.cloudinary.com/" + "a" * 180 + ".jpg"
+        serializer = StudioPreconWriteSerializer(data={"attachments": [{"url": long_url}]}, partial=True)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_attachment_urls_reject_extreme_length(self):
+        long_url = "https://res.cloudinary.com/" + "a" * 2100 + ".jpg"
         serializer = StudioPreconWriteSerializer(data={"attachments": [{"url": long_url}]}, partial=True)
         self.assertFalse(serializer.is_valid())
 

@@ -1056,6 +1056,7 @@ class Command(BaseCommand):
                                         "RoomLengthWidthUnits"
                                     )
                                 )
+                                or "Meters"
                             ),
                         )
                     )

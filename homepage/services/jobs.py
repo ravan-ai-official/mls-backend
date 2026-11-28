@@ -17,7 +17,7 @@ from mls.views_market import GTA_CITIES
 from . import ampre
 from .feeds import refresh_market_snapshot
 from .news import ingest_all
-from .sold_below import find_repeat_sale_losses
+from .sold_below import find_repeat_sale_gains, find_repeat_sale_losses
 from .subscriptions import send_nearby_alerts
 
 logger = logging.getLogger(__name__)
@@ -29,22 +29,24 @@ SOLD_ROWS_PER_CITY = 50000
 
 
 def refresh_sold_below_purchase(cities=GTA_CITIES) -> dict[str, int]:
-    """Rebuild the SoldBelowPurchase table from AMPRE closed history.
+    """Rebuild SoldBelowPurchase + ProfitableInvestment from AMPRE closed history.
 
-    A city whose fetch fails keeps its previous rows: the table is replaced
+    One AMPRE pull per city feeds both rails (losses and 12‑month gains).
+    A city whose fetch fails keeps its previous rows: each table is replaced
     city by city, never emptied because one upstream call broke.
     """
-    from homepage.models import SoldBelowPurchase
+    from homepage.models import ProfitableInvestment, SoldBelowPurchase
 
     summary: dict[str, int] = {}
     for city in cities:
         try:
             rows = ampre.fetch_closed_sales(city, days=SOLD_HISTORY_DAYS, max_rows=SOLD_ROWS_PER_CITY)
         except AmpreClientError as exc:
-            logger.warning("Sold-below refresh skipped %s: %s", city, exc)
+            logger.warning("Repeat-sale refresh skipped %s: %s", city, exc)
             summary[city] = -1
             continue
         losses = find_repeat_sale_losses(rows)
+        gains = find_repeat_sale_gains(rows)
         with transaction.atomic():
             SoldBelowPurchase.objects.filter(city__iexact=city).delete()
             SoldBelowPurchase.objects.bulk_create(
@@ -67,8 +69,32 @@ def refresh_sold_below_purchase(cities=GTA_CITIES) -> dict[str, int]:
                 # not abort the whole city.
                 ignore_conflicts=True,
             )
+            ProfitableInvestment.objects.filter(city__iexact=city).delete()
+            ProfitableInvestment.objects.bulk_create(
+                [
+                    ProfitableInvestment(
+                        listing_key=gain.listing_key,
+                        address=gain.address,
+                        city=gain.city,
+                        property_sub_type=gain.property_sub_type,
+                        bedrooms=gain.bedrooms,
+                        bathrooms=gain.bathrooms,
+                        close_price=gain.close_price,
+                        close_date=gain.close_date,
+                        previous_close_price=gain.previous_close_price,
+                        previous_close_date=gain.previous_close_date,
+                    )
+                    for gain in gains
+                ],
+                ignore_conflicts=True,
+            )
         summary[city] = len(losses)
+        summary[f"{city}:gains"] = len(gains)
     return summary
+
+
+# Alias used by management command / docs for the gains half of the same job.
+refresh_profitable_investments = refresh_sold_below_purchase
 
 
 def run_all() -> dict[str, object]:

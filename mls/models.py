@@ -144,8 +144,10 @@ class Property(models.Model):
     status_change_timestamp = models.DateTimeField(null=True, blank=True)
     public_remarks = models.TextField(null=True, blank=True)
     list_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    original_list_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     inclusions = models.TextField(null=True, blank=True)
     list_office_key = models.CharField(max_length=2000, null=True, blank=True)
+    list_office_name = models.CharField(max_length=2000, null=True, blank=True)
     colist_office_key = models.CharField(max_length=2000, null=True, blank=True)
     list_agent_key = models.CharField(max_length=2000, null=True, blank=True)
     listing_url = models.URLField(null=True, blank=True)
@@ -1354,7 +1356,8 @@ class Attachment(models.Model):
         on_delete=models.CASCADE
     )
 
-    url = models.URLField()
+    # Cloudinary delivery URLs routinely exceed Django's URLField default (200).
+    url = models.URLField(max_length=2000)
 
     mime_type = models.CharField(max_length=100)
 

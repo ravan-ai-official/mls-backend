@@ -108,8 +108,14 @@ class NewsListView(PublicView):
 
 
 class InvestorPicksView(PublicView):
+    """Homepage high-return rail (limit=3) and /high-return view-all (higher limit).
+
+    Do not pass listing filters here — the page is the feed itself (pins + yield fill).
+    """
+
     def get(self, request):
-        limit = _int_param(request, "limit", 3, 1, 12)
+        # Cap 48 so the dedicated view-all page can show the full ranked set.
+        limit = _int_param(request, "limit", 3, 1, 48)
         city = (request.query_params.get("city") or "").strip() or None
         return Response(feeds.investor_picks(limit=limit, city=city))
 
@@ -131,6 +137,24 @@ class SoldBelowPurchaseView(PublicView):
         city = (request.query_params.get("city") or "").strip() or None
         return Response(
             feeds.sold_below_purchase(
+                limit=limit,
+                city=city,
+                cities=cities or None,
+            )
+        )
+
+
+class ProfitableInvestmentsView(PublicView):
+    """Homepage rail (limit=3) and /profitable-investments view-all (higher limit)."""
+
+    def get(self, request):
+        from mls.services.visitor_place import cities_for_request
+
+        limit = _int_param(request, "limit", 3, 1, 48)
+        cities = cities_for_request(request)
+        city = (request.query_params.get("city") or "").strip() or None
+        return Response(
+            feeds.profitable_investments(
                 limit=limit,
                 city=city,
                 cities=cities or None,

@@ -99,6 +99,33 @@ def with_rent_amount(qs):
     return qs.annotate(rent_amount=Coalesce("lease_amount", "total_actual_rent"))
 
 
+# Homepage Luxury tile / search: living area must be *more than* this (not a price floor).
+LUXURY_MIN_SQFT = 3500
+
+
+def with_effective_sqft(qs, annotation_name: str = "effective_sqft"):
+    """Living size: above-grade → living_area → building_area_total.
+
+    Matches how featured rails and property cards resolve sqft. Idempotent.
+    """
+    if annotation_name in qs.query.annotations:
+        return qs
+    return qs.annotate(
+        **{
+            annotation_name: Coalesce(
+                "above_grade_finished_area",
+                "living_area",
+                "building_area_total",
+            )
+        }
+    )
+
+
+def luxury_sqft_q(annotation_name: str = "effective_sqft") -> Q:
+    """Q for Luxury: effective living area strictly greater than ``LUXURY_MIN_SQFT``."""
+    return Q(**{f"{annotation_name}__gt": LUXURY_MIN_SQFT})
+
+
 def price_field_for(qs, params):
     """The field price filters and price sorting use: rent for Rent, else list price."""
     if params.get("transaction_type") == "rent":

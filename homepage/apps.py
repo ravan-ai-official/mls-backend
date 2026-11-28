@@ -9,7 +9,7 @@ class HomepageConfig(AppConfig):
     * editorial content the business maintains in admin (buyer incentives,
       partners, community imagery, news sources), and
     * derived feeds computed from the listing data we already have — rental
-      yield estimates, price-drop deals, repeat-sale losses, the GTA market
+      yield estimates, price-drop deals, repeat-sale losses/gains, the GTA market
       snapshot — plus the subscriptions (newsletter, neighbour alerts) that
       turn homepage visitors into contactable leads.
 

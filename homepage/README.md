@@ -21,6 +21,7 @@ Review the seeded buyer incentives in admin (**Homepage › Buyer incentives**) 
 | `investor-picks/?limit=&city=` | GET | public | local catalogue: sale listings + rental comps |
 | `deals/?limit=` | GET | public | AMPRE price drops (503 if upstream down) |
 | `sold-below-purchase/?limit=&city=` | GET | public | table filled by nightly job |
+| `profitable-investments/?limit=&city=` | GET | public | repeat sales that closed higher in last 12 months (same job as sold-below) |
 | `market-snapshot/` | GET | public | table refreshed by job (503 if never computed and AMPRE down) |
 | `nearby-activity/?lat=&lng=&radius_km=` | GET | public | local catalogue, new listings in the last 30 days |
 | `newsletter/subscribe/` | POST | optional | stores CASL consent and sends a welcome email |

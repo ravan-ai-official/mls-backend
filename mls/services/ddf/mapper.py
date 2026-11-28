@@ -70,6 +70,7 @@ def map_property_defaults(data):
 
         # Core property information
         "list_price": safe_decimal(data.get("ListPrice")),
+        "original_list_price": safe_decimal(data.get("OriginalListPrice")),
         "property_sub_type": safe_str(data.get("PropertySubType")),
         "documents_available": safe_list(data.get("DocumentsAvailable")),
         "lease_amount": safe_decimal(data.get("LeaseAmount")),
@@ -153,6 +154,10 @@ def map_property_defaults(data):
         ),
         "common_interest": safe_str(data.get("CommonInterest")),
         "list_aor": safe_str(data.get("ListAOR")),
+        "list_office_key": safe_str(data.get("ListOfficeKey")),
+        "list_office_name": safe_str(data.get("ListOfficeName")),
+        "colist_office_key": safe_str(data.get("CoListOfficeKey")),
+        "list_agent_key": safe_str(data.get("ListAgentKey")),
 
         # Address and location
         "unparsed_address": safe_str(data.get("UnparsedAddress")),

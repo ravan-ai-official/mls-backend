@@ -29,8 +29,13 @@ def _row(prop: Property) -> dict:
 
 
 def clear_investor_cache() -> None:
-    """Homepage investor feed is keyed by limit (1–12) and optional city."""
-    keys = [f"home:investor:{limit}:" for limit in range(1, 13)]
+    """Investor feed cache keys: home:investor:v2:{limit}:{city}."""
+    keys = [
+        f"home:investor:v2:{limit}:"
+        for limit in (1, 2, 3, 6, 12, 24, 36, 48)
+    ]
+    # Legacy pre-v2 keys (blank city).
+    keys.extend(f"home:investor:{limit}:" for limit in range(1, 13))
     cache.delete_many(keys)
 
 

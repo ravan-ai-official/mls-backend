@@ -22,11 +22,13 @@ logger = logging.getLogger(__name__)
 # Active rows older than this are considered stale enough to re-check AMPRE.
 STALE_ACTIVE_HOURS = 36
 
-SELECT_FIELDS = [
+# Core fields known to work on AMPRE Property $select.
+SELECT_FIELDS_CORE = [
     "ListingKey",
     "ListingId",
     "StandardStatus",
     "ListPrice",
+    "OriginalListPrice",
     "ClosePrice",
     "CloseDate",
     "PreviousListPrice",
@@ -54,11 +56,31 @@ SELECT_FIELDS = [
     "AssociationFeeIncludes",
     "ParkingTotal",
     "ParkingFeatures",
+    "ListOfficeName",
+    "ListOfficeKey",
+    "ArchitecturalStyle",
+    "ConstructionMaterials",
+    "ExteriorFeatures",
     "PublicRemarks",
     "OriginalEntryTimestamp",
     "ModificationTimestamp",
     "TransactionType",
 ]
+
+# Extended garage / kitchen / stories fields — retry without these on AMPRE 400.
+SELECT_FIELDS_EXTENDED = [
+    *SELECT_FIELDS_CORE,
+    "GarageSpaces",
+    "CoveredSpaces",
+    "GarageType",
+    "NumberOfKitchens",
+    "KitchensTotalInteger",
+    "Stories",
+    "StoriesTotal",
+]
+
+# Back-compat alias used by tests / callers.
+SELECT_FIELDS = SELECT_FIELDS_EXTENDED
 
 
 def _dec(value):
@@ -138,10 +160,15 @@ def map_ampre_row(row: dict) -> dict:
     if isinstance(structure, list):
         structure = structure[0] if structure else None
 
+    garage_type = row.get("GarageType")
+    if isinstance(garage_type, list):
+        garage_type = ", ".join(str(x) for x in garage_type if x) or None
+
     return {
         "listing_id": (_str_or_join(row.get("ListingId") or row.get("ListingKey"), 50)),
         "standard_status": (_str_or_join(row.get("StandardStatus"), 50) or "Active"),
         "list_price": _dec(row.get("ListPrice")),
+        "original_list_price": _dec(row.get("OriginalListPrice")),
         "close_price": _dec(row.get("ClosePrice")),
         "close_date": _date(row.get("CloseDate")),
         "previous_list_price": _dec(row.get("PreviousListPrice")),
@@ -170,6 +197,23 @@ def map_ampre_row(row: dict) -> dict:
         "association_fee_includes": _str_or_join(row.get("AssociationFeeIncludes")),
         "parking_total": _int(row.get("ParkingTotal")),
         "parking_features": _str_or_join(row.get("ParkingFeatures")),
+        "garages": _int(
+            row.get("GarageSpaces")
+            if row.get("GarageSpaces") is not None
+            else row.get("CoveredSpaces")
+        ),
+        "garage_size": _str_or_join(garage_type),
+        "kitchens": _int(
+            row.get("NumberOfKitchens")
+            if row.get("NumberOfKitchens") is not None
+            else row.get("KitchensTotalInteger")
+        ),
+        "stories": _int(row.get("Stories") or row.get("StoriesTotal")),
+        "architectural_style": _str_or_join(row.get("ArchitecturalStyle")),
+        "construction_materials": _str_or_join(row.get("ConstructionMaterials")),
+        "exterior_features": _str_or_join(row.get("ExteriorFeatures")),
+        "list_office_name": _str_or_join(row.get("ListOfficeName"), 2000),
+        "list_office_key": _str_or_join(row.get("ListOfficeKey")),
         "building_features": _str_or_join(row.get("BuildingFeatures")),
         "common_interest": _str_or_join(row.get("CommonInterest"), 100),
         "public_remarks": row.get("PublicRemarks") or "",
@@ -212,13 +256,30 @@ def refresh_listing_from_ampre(prop: Property) -> Property | None:
         clauses.append(f"ListingKey eq '{safe}'")
     filter_expression = " or ".join(clauses)
 
+    fetch_kwargs = dict(
+        filter_expression=filter_expression,
+        top=5,
+        max_rows=5,
+    )
     try:
-        rows = fetch_property_page(
-            filter_expression=filter_expression,
-            select_fields=SELECT_FIELDS,
-            top=5,
-            max_rows=5,
-        )
+        try:
+            rows = fetch_property_page(
+                select_fields=SELECT_FIELDS_EXTENDED,
+                **fetch_kwargs,
+            )
+        except AmpreClientError as exc:
+            msg = str(exc).lower()
+            if "400" not in msg and "bad request" not in msg and "select" not in msg:
+                raise
+            logger.warning(
+                "AMPRE refresh extended $select rejected for %s; retrying core: %s",
+                prop.listing_key,
+                exc,
+            )
+            rows = fetch_property_page(
+                select_fields=SELECT_FIELDS_CORE,
+                **fetch_kwargs,
+            )
     except AmpreClientError as exc:
         logger.warning("AMPRE refresh skipped for %s: %s", prop.listing_key, exc)
         return None

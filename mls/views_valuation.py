@@ -253,6 +253,8 @@ class ValuationEstimateAPIView(APIView):
                         "series": [],
                     },
                     "comps": [],
+                    "comparables": [],
+                    "active_comps": [],
                     "agent": match_agent(_fsa_from_postal(postal), city, city_region),
                     "beta": True,
                     "sparse": True,
@@ -417,7 +419,7 @@ class ValuationEstimateAPIView(APIView):
             if media:
                 photo_by_key[key] = (media.media_url or "").strip()
 
-        def _comp_out(c: Dict[str, Any], *, include_photo: bool = False) -> Dict[str, Any]:
+        def _comp_out(c: Dict[str, Any], *, include_photo: bool = True) -> Dict[str, Any]:
             details = property_details(comp_props.get(c.get("listing_key")))
             # Enrich from AMPRE/proxy fields when the local catalogue row is gone.
             if not details.get("address") and c.get("unparsed_address"):
@@ -428,18 +430,23 @@ class ValuationEstimateAPIView(APIView):
                 details["community"] = c.get("city_region")
             if details.get("list_price") is None and c.get("list_price") is not None:
                 details["list_price"] = c.get("list_price")
-            if details.get("last_sold_price") is None and c.get("close_price") is not None:
-                details["last_sold_price"] = c.get("close_price")
+            sold_price = c.get("close_price") if c.get("close_price") is not None else c.get("price")
+            if details.get("last_sold_price") is None and sold_price is not None:
+                details["last_sold_price"] = sold_price
             if details.get("days_on_market") is None and c.get("days_on_market") is not None:
                 details["days_on_market"] = c.get("days_on_market")
             if details.get("year_built") is None and c.get("year_built") is not None:
                 details["year_built"] = c.get("year_built")
             if details.get("floor_area_sqft") is None and c.get("living_area") is not None:
                 details["floor_area_sqft"] = c.get("living_area")
+            if details.get("bedrooms") is None and c.get("bedrooms_total") is not None:
+                details["bedrooms"] = c.get("bedrooms_total")
+            if details.get("bathrooms_full") is None and c.get("bathrooms_total_integer") is not None:
+                details["bathrooms_full"] = c.get("bathrooms_total_integer")
             payload = {
                 "listing_key": c.get("listing_key"),
                 "price": c.get("price"),
-                "close_price": c.get("close_price"),
+                "close_price": sold_price,
                 "list_price": c.get("list_price"),
                 "bedrooms_total": c.get("bedrooms_total"),
                 "bathrooms_total_integer": c.get("bathrooms_total_integer"),
@@ -504,7 +511,9 @@ class ValuationEstimateAPIView(APIView):
                 },
                 "breakdown": breakdown,
                 "trend": trend,
+                # Sold comparison table — keep both keys; some FE builds read `comparables`.
                 "comps": comps_out,
+                "comparables": comps_out,
                 "active_comps": active_out,
                 "agent": agent,
                 "beta": True,
